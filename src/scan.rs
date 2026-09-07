@@ -29,6 +29,8 @@ pub struct Item {
     pub is_dir: bool,
     pub size: AtomicU64,
     pub files: AtomicU64,
+    /// Bytes per file type so far, so the live map can wear real colours.
+    pub types: [AtomicU64; 10],
     pub done: AtomicBool,
 }
 
@@ -51,6 +53,7 @@ impl Progress {
                             is_dir: ft.is_dir(),
                             size: AtomicU64::new(0),
                             files: AtomicU64::new(0),
+                            types: Default::default(),
                             done: AtomicBool::new(false),
                         })
                     })
@@ -61,32 +64,36 @@ impl Progress {
     }
 }
 
+/// Folders a scan never enters: system mounts under "/", and DiMe's own vault (moving something there must not just move it on the map).
+pub fn skip_list(root: &Path) -> Vec<PathBuf> {
+    let mut skip: Vec<PathBuf> = if root == Path::new("/") { ["/dev", "/Volumes", "/System/Volumes", "/private/var/vm", "/proc"].iter().map(PathBuf::from).collect() } else { vec![] };
+    if let Ok(h) = std::env::var("HOME") {
+        skip.push(PathBuf::from(h).join(".dime"));
+    }
+    skip
+}
 pub fn scan(root: &Path, progress: &Progress) -> Node {
-    let skip: Vec<PathBuf> = if root == Path::new("/") {
-        ["/dev", "/Volumes", "/System/Volumes", "/private/var/vm", "/proc"]
-            .iter()
-            .map(PathBuf::from)
-            .collect()
-    } else {
-        vec![]
-    };
+    let skip = skip_list(root);
     let own = fs::symlink_metadata(root).ok();
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
+    let dev = own.as_ref().map(|m| m.dev()).unwrap_or(0);
     let mut children: Vec<Node> = progress
         .items
         .par_iter()
         .filter_map(|it| {
             let p = root.join(&it.name);
             let node = if it.is_dir {
-                if skip.iter().any(|s| s == &p) {
+                if skip.iter().any(|s| s == &p) || fs::symlink_metadata(&p).map(|m| m.dev() != dev).unwrap_or(true) {
+                    it.done.store(true, Ordering::Relaxed); // skipped, but finished as far as the live map is concerned
                     return None;
                 }
-                scan_dir(&p, &it.size, &it.files, &skip)
+                scan_dir(&p, &it.size, &it.files, &it.types, dev, &skip)
             } else {
                 let md = fs::symlink_metadata(&p).ok()?;
                 let n = file_node(&p, &md);
                 it.size.store(n.size, Ordering::Relaxed);
                 it.files.store(1, Ordering::Relaxed);
+                it.types[type_of(&n.name)].store(n.size, Ordering::Relaxed);
                 n
             };
             it.done.store(true, Ordering::Relaxed);
@@ -117,7 +124,121 @@ fn file_node(p: &Path, md: &fs::Metadata) -> Node {
     }
 }
 
-fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, skip: &[PathBuf]) -> Node {
+/// One directory entry as `getattrlistbulk` hands it back: no per-file stat, no path building.
+struct Ent {
+    name: String,
+    kind: u32, // VREG 1, VDIR 2, VLNK 5, else other
+    size: u64,
+    mtime: i64,
+    atime: i64,
+    dev: u64,
+}
+/// Read a whole directory with macOS's bulk attribute call: name, type, times, allocated size and device for every entry,
+/// a few hundred entries per syscall. Errors fall back to the readdir + lstat walk.
+fn bulk_entries(path: &Path) -> std::io::Result<Vec<Ent>> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| std::io::Error::other("nul in path"))?;
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut al: libc::attrlist = unsafe { std::mem::zeroed() };
+    al.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    al.commonattr = libc::ATTR_CMN_RETURNED_ATTRS | libc::ATTR_CMN_NAME | libc::ATTR_CMN_DEVID | libc::ATTR_CMN_OBJTYPE | libc::ATTR_CMN_MODTIME | libc::ATTR_CMN_ACCTIME;
+    al.fileattr = libc::ATTR_FILE_ALLOCSIZE;
+    thread_local! { static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 128 * 1024]); } // one buffer per rayon thread, never re-zeroed
+    let mut out = Vec::new();
+    BUF.with(|b| -> std::io::Result<()> {
+    let mut buf = b.borrow_mut();
+    let rd32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let rd64 = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    let fd_guard = fd;
+    loop {
+        let n = unsafe { libc::getattrlistbulk(fd, &mut al as *mut libc::attrlist as *mut libc::c_void, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), libc::FSOPT_PACK_INVAL_ATTRS as u64) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            unsafe { libc::close(fd_guard) };
+            return Err(e);
+        }
+        if n == 0 {
+            break;
+        }
+        let buf: &[u8] = &buf;
+        let mut off = 0usize;
+        for _ in 0..n {
+            let start = off;
+            let len = rd32(&buf, off) as usize;
+            let mut p = off + 4;
+            // returned attribute set: which of the requested attributes are actually present (5 x u32)
+            let ret_common = rd32(&buf, p);
+            let ret_file = rd32(&buf, p + 12); // attribute_set_t: common, vol, dir, file, fork
+            p += 20;
+            let mut name = String::new();
+            if ret_common & libc::ATTR_CMN_NAME != 0 {
+                let (ro, rl) = (rd32(&buf, p) as i32 as isize, rd32(&buf, p + 4) as usize);
+                let s = (p as isize + ro) as usize;
+                name = String::from_utf8_lossy(&buf[s..s + rl.saturating_sub(1)]).into_owned();
+                p += 8;
+            }
+            let mut dev = 0;
+            if ret_common & libc::ATTR_CMN_DEVID != 0 { dev = rd32(&buf, p) as u64; p += 4; }
+            let mut kind = 0;
+            if ret_common & libc::ATTR_CMN_OBJTYPE != 0 { kind = rd32(&buf, p); p += 4; }
+            let mut mtime = 0;
+            if ret_common & libc::ATTR_CMN_MODTIME != 0 { mtime = rd64(&buf, p) as i64; p += 16; }
+            let mut atime = 0;
+            if ret_common & libc::ATTR_CMN_ACCTIME != 0 { atime = rd64(&buf, p) as i64; p += 16; }
+            let mut size = 0;
+            if ret_file & libc::ATTR_FILE_ALLOCSIZE != 0 { size = rd64(&buf, p); }
+            out.push(Ent { name, kind, size, mtime, atime, dev });
+            off = start + len;
+        }
+    }
+    Ok(())
+    })?;
+    unsafe { libc::close(fd) };
+    Ok(out)
+}
+
+fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[AtomicU64; 10], dev: u64, skip: &[PathBuf]) -> Node {
+    if std::env::var_os("DIME_SLOW_SCAN").is_some() { return scan_dir_slow(path, bytes, counter, types, dev, skip); }
+    let Ok(ents) = bulk_entries(path) else { return scan_dir_slow(path, bytes, counter, types, dev, skip) };
+    let own = fs::symlink_metadata(path).ok();
+    let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
+    let mut children: Vec<Node> = Vec::with_capacity(ents.len());
+    let mut dirs: Vec<String> = Vec::new();
+    for e in ents {
+        match e.kind {
+            2 => { if e.dev == dev && !skip.iter().any(|s| s == &path.join(&e.name)) { dirs.push(e.name); } } // another volume mounted here: not this disk's bytes
+            1 => {
+                counter.fetch_add(1, Ordering::Relaxed);
+                bytes.fetch_add(e.size, Ordering::Relaxed);
+                types[type_of(&e.name)].fetch_add(e.size, Ordering::Relaxed);
+                children.push(Node { name: e.name, size: e.size, mtime: e.mtime, atime: e.atime, is_dir: false, files: 1, children: vec![] });
+            }
+            _ => {} // symlinks, sockets, devices
+        }
+    }
+    let sub: Vec<Node> = if dirs.len() > 1 {
+        dirs.into_par_iter().map(|d| scan_dir(&path.join(d), bytes, counter, types, dev, skip)).collect()
+    } else {
+        dirs.into_iter().map(|d| scan_dir(&path.join(d), bytes, counter, types, dev, skip)).collect()
+    };
+    children.extend(sub);
+    children.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+    let mut size = 0;
+    let mut files = 0;
+    for c in &children {
+        size += c.size;
+        files += c.files;
+        mtime = mtime.max(c.mtime);
+        atime = atime.max(c.atime);
+    }
+    Node { name: name_of(path), size, mtime, atime, is_dir: true, files, children }
+}
+
+/// The portable walk: readdir plus one lstat per entry. Used when the bulk call is refused (some network and FUSE volumes).
+fn scan_dir_slow(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[AtomicU64; 10], dev: u64, skip: &[PathBuf]) -> Node {
     let own = fs::symlink_metadata(path).ok();
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
     let entries: Vec<fs::DirEntry> = match fs::read_dir(path) {
@@ -134,14 +255,15 @@ fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, skip: &[PathBuf
                 return None;
             }
             if ft.is_dir() {
-                if skip.iter().any(|s| s == &p) {
-                    return None;
+                if skip.iter().any(|s| s == &p) || md.dev() != dev {
+                    return None; // another volume mounted here (a simulator runtime image, a network share): not this disk's bytes
                 }
-                return Some(scan_dir(&p, bytes, counter, skip));
+                return Some(scan_dir_slow(&p, bytes, counter, types, dev, skip));
             }
             let n = file_node(&p, &md);
             counter.fetch_add(1, Ordering::Relaxed);
             bytes.fetch_add(n.size, Ordering::Relaxed);
+            types[type_of(&n.name)].fetch_add(n.size, Ordering::Relaxed);
             Some(n)
         })
         .collect();
@@ -173,7 +295,7 @@ pub fn patch(root_node: &mut Node, root: &Path, abs: &Path) {
     if parts.is_empty() {
         return;
     }
-    fn go(n: &mut Node, parts: &[String], abs: &Path) -> (i64, i64) {
+    fn go(n: &mut Node, parts: &[String], abs: &Path, root_dev: u64, skip: &[PathBuf]) -> (i64, i64) {
         let idx = n.children.iter().position(|c| c.name == parts[0]);
         let delta = match (idx, parts.len()) {
             (Some(i), 1) => {
@@ -199,7 +321,7 @@ pub fn patch(root_node: &mut Node, root: &Path, abs: &Path) {
                     }
                 }
             }
-            (Some(i), _) => go(&mut n.children[i], &parts[1..], abs),
+            (Some(i), _) => go(&mut n.children[i], &parts[1..], abs, root_dev, skip),
             (None, _) => {
                 // first missing component: stat what exists at that depth and insert it whole
                 let mut p = abs.to_path_buf();
@@ -210,7 +332,8 @@ pub fn patch(root_node: &mut Node, root: &Path, abs: &Path) {
                 if md.file_type().is_symlink() {
                     return (0, 0);
                 }
-                let new = if md.is_dir() { scan_dir(&p, &AtomicU64::new(0), &AtomicU64::new(0), &[]) } else { file_node(&p, &md) };
+                if md.is_dir() && (md.dev() != root_dev || skip.iter().any(|s| s == &p)) { return (0, 0); } // a mount or a skipped folder appearing: not this disk's bytes
+                let new = if md.is_dir() { scan_dir(&p, &AtomicU64::new(0), &AtomicU64::new(0), &Default::default(), root_dev, skip) } else { file_node(&p, &md) };
                 let d = (new.size as i64, new.files as i64);
                 n.children.push(new);
                 d
@@ -223,7 +346,8 @@ pub fn patch(root_node: &mut Node, root: &Path, abs: &Path) {
         }
         delta
     }
-    go(root_node, &parts, abs);
+    let root_dev = fs::symlink_metadata(root).map(|m| m.dev()).unwrap_or(0);
+    go(root_node, &parts, abs, root_dev, &skip_list(root));
 }
 
 /// Bytes per file type: code, images, video, audio, documents, archives, data, models, apps, other.

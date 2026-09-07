@@ -19,10 +19,10 @@ const ageDays = (n) => Math.max(0, Math.floor((Date.now() / 1000 - Math.max(n.at
 const fmtAge = (d) => d === 0 ? 'used today' : d < 30 ? `${d}d idle` : d < 365 ? `${Math.round(d / 30)}mo idle` : `${(d / 365).toFixed(1)}y idle`;
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const toast = (msg, who) => { const t = $('#toast'); t.textContent = msg; t.className = who || ''; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), 2600); };
-// the two characters: Du runs the disk search party, Me flies the rocket over live processes
+// the two characters: Di runs the disk search party, Me flies the rocket over live processes
 const DU_GLYPH = '<svg viewBox="0 0 48 32" aria-hidden="true"><path d="M6 6h30M21 6v6M14 12h18l6 6v4H10l-4-4v-6zM8 26h14M4 22l6 4M36 22l-6-2"/></svg>';
 const ME_GLYPH = '<svg viewBox="0 0 32 48" aria-hidden="true"><path d="M16 4c5 4 7 10 7 18v10H9V22c0-8 2-14 7-18zM9 26l-5 8h5M23 26l5 8h-5M13 40l3 6 3-6"/></svg>';
-const whoBadge = (who) => { const b = document.createElement('span'); b.className = `who ${who}`; b.innerHTML = (who === 'du' ? DU_GLYPH : ME_GLYPH) + (who === 'du' ? 'Du' : 'Me'); b.title = who === 'du' ? 'Du · disk explorer' : 'Me · memory explorer'; return b; };
+const whoBadge = (who) => { const b = document.createElement('span'); b.className = `who ${who}`; b.innerHTML = (who === 'du' ? DU_GLYPH : ME_GLYPH) + (who === 'du' ? 'Di' : 'Me'); b.title = who === 'du' ? 'Di · disk explorer' : 'Me · memory explorer'; return b; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- squarified treemap ----------
@@ -73,7 +73,7 @@ const TYPE_HEX = ['#4FD1C5', '#E07BB5', '#9B6BD6', '#5B8DEF', '#E8E6DF', '#F5C26
 const TYPE_COLOR = TYPE_HEX.map((c) => new THREE.Color(c));
 const dominant = (types) => { let i = 9, m = -1; types?.forEach((v, k) => { if (v > m) { m = v; i = k; } }); return i; };
 const typeShare = (n) => { const t = n.types; if (!t) return null; const tot = t.reduce((s, v) => s + v, 0) || 1; const i = dominant(t); return { i, share: t[i] / tot }; };
-let colorMode = new URLSearchParams(location.search).get('c') || (() => { try { return localStorage.getItem('dume.color') || 'type'; } catch { return 'type'; } })();
+let colorMode = new URLSearchParams(location.search).get('c') || (() => { try { return localStorage.getItem('dime.color') || 'type'; } catch { return 'type'; } })();
 if (colorMode !== 'age') colorMode = 'type';
 const TIER_COLOR = { safe: new THREE.Color('#FF7A3D'), likely: new THREE.Color('#F5C26B'), review: new THREE.Color('#E8457A') };
 const TIER_LABEL = { safe: 'Safe to remove', likely: 'Probably safe', review: 'Worth a look' };
@@ -118,6 +118,11 @@ const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 const blocks = new THREE.Group(); scene.add(blocks);
 const byKey = new Map();
 const within = (r, box) => ({ x: box.x + ((r.x + STAGE_W / 2) / STAGE_W) * box.w, z: box.z + ((r.z + STAGE_D / 2) / STAGE_D) * box.h, w: (r.w / STAGE_W) * box.w, h: (r.h / STAGE_D) * box.h });
+// scan-time layout: equal cells in name order; only the height moves as bytes are counted
+const gridOf = (items) => {
+  const n = Math.max(1, items.length), cols = Math.ceil(Math.sqrt(n * STAGE_W / STAGE_D)), rows = Math.ceil(n / cols), w = STAGE_W / cols, h = STAGE_D / rows;
+  return items.map((item, i) => ({ item, x: -STAGE_W / 2 + (i % cols) * w, z: -STAGE_D / 2 + Math.floor(i / cols) * h, w, h }));
+};
 const layoutOf = (items) => squarify(items, 0, 0, STAGE_W, STAGE_D).map((r) => ({ item: r.item, x: r.x - STAGE_W / 2, z: r.y - STAGE_D / 2, w: r.w, h: r.h }));
 const heightFor = (size, max) => 1.5 + 26 * Math.pow(size / max, 0.4);
 
@@ -133,7 +138,7 @@ function setInner(m, inner) {
   const max = Math.max(1, ...inner.map((k) => k.size));
   for (const r of squarify(inner, 0, 0, 1, 1)) {
     const n = r.item;
-    const col = FILTER_COLOR[filter] ? FILTER_COLOR[filter].clone().lerp(new THREE.Color('#FFFFFF'), 0.25) : filter === 'idle' ? heatColor(Math.min(1, (n.is_dir ? idleDays : ageDays(n)) / 365)).lerp(new THREE.Color('#FFFFFF'), 0.2) : colorMode === 'type' && n.types ? TYPE_COLOR[dominant(n.types)] : gunkSet.has(n.path) ? TIER_COLOR[gunkSet.get(n.path).tier] : heatColor(Math.min(1, ageDays(n) / 365));
+    const col = FILTER_COLOR[filter] ? FILTER_COLOR[filter].clone().lerp(new THREE.Color('#FFFFFF'), 0.25) : colorMode === 'type' && n.types ? TYPE_COLOR[dominant(n.types)] : gunkSet.has(n.path) ? TIER_COLOR[gunkSet.get(n.path).tier] : heatColor(Math.min(1, ageDays(n) / 365));
     const c = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial({ color: col, roughness: 0.5, emissive: col, emissiveIntensity: 0.35 }));
     const lift = 0.04 + 0.1 * Math.pow(n.size / max, 0.5);
     c.scale.set(r.w * 0.86, lift, r.h * 0.86);
@@ -168,19 +173,18 @@ function setBlocks(entries, { from, to, stagger } = {}) {
       m.add(edge);
       const start = from ? within(e.rect, from) : e.rect;
       const cx = e.rect.x + e.rect.w / 2, cz = e.rect.z + e.rect.h / 2;
-      m.userData = { cur: { ...start, y: 0 }, target: null, label: null, dying: false, edge, drop: null, live: !!e.fly, wave: 0, done: !!e.node.done,
+      m.userData = { cur: { ...start, y: 0 }, target: null, label: null, dying: false, edge, drop: null, live: !!e.fly, done: !!e.node.done,
         delay: stagger ? Math.hypot(cx, cz) / 70 * 0.9 + Math.random() * 0.08 : 0, popT: from ? 0 : -1, lastSize: 0 };
       if (e.fly) crewJob(e.key, e.rect);
       place(m, m.userData.cur);
       byKey.set(e.key, m); blocks.add(m);
     }
     const u = m.userData;
-    if (e.fly && u.lastSize && e.node.size > u.lastSize * 1.08) u.wave = Math.min(u.wave, 0.65); // it grew: run the wave again over the new ground
     u.lastSize = e.node.size; u.live = !!e.fly; u.done = !!e.node.done;
     u.dying = false; u.entry = e; u.node = e.node;
     u.target = { ...e.rect, y: e.y };
     u.colorTarget = e.color; u.edgeColor = e.edge; u.em = e.em; u.pulse = e.pulse;
-    if (!e.fly) m.material.opacity = 1; // live blocks fade in as the pixel wave finishes
+    m.material.opacity = 1;
     setLabel(m, e, e.rect.w * e.rect.h > STAGE_W * STAGE_D * 0.012);
     setInner(m, e.rect.w * e.rect.h > STAGE_W * STAGE_D * 0.006 ? e.inner : null);
   }
@@ -227,47 +231,9 @@ function updateBlocks(dt, now) {
   }
 }
 
-// ---------- pixel wave: unfinished folders are built from small cubes sweeping in from a corner ----------
-const VOX = 4.4, VOX_MAX = 4000;
-const vox = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.15 }), VOX_MAX);
-vox.instanceMatrix.setUsage(THREE.DynamicDrawUsage); vox.count = 0; scene.add(vox);
-const _vm = new THREE.Matrix4(), _vq = new THREE.Quaternion(), _vp = new THREE.Vector3(), _vs = new THREE.Vector3(), _vc = new THREE.Color();
-function updateVoxels(dt, now) {
-  let n = 0;
-  for (const m of byKey.values()) {
-    const u = m.userData;
-    if (!u.live) continue;
-    // the solid block is a faint shell while cubes are still arriving; it fades in once the folder is counted
-    const solidT = u.done && u.wave >= 1 ? 1 : 0.05;
-    m.material.opacity = smooth(m.material.opacity, solidT, 1 - Math.exp(-dt * 3)); m.material.transparent = true;
-    if (u.done && u.wave >= 1 && m.material.opacity > 0.98) { u.live = false; m.material.transparent = false; continue; }
-    if (u.delay > 0) continue;
-    u.wave = Math.min(1, u.wave + dt * (u.done ? 0.9 : 0.35));
-    const c = u.cur, nx = Math.max(1, Math.round((c.w - GAP) / VOX)), nz = Math.max(1, Math.round((c.h - GAP) / VOX));
-    const cw = (c.w - GAP) / nx, cd = (c.h - GAP) / nz, diag = nx + nz - 2 || 1;
-    const col = m.material.color;
-    for (let i = 0; i < nx && n < VOX_MAX; i++) for (let j = 0; j < nz && n < VOX_MAX; j++) {
-      const f = (i + j) / diag; // wave sweeps from one corner to the opposite one
-      const t = (u.wave * 1.25 - f) / 0.25; // 0..1 as the wave passes this cell
-      if (t <= 0) continue;
-      const k = Math.min(1, t), rise = 1 - Math.pow(1 - k, 3);
-      const jitter = 0.88 + 0.24 * (((i * 7 + j * 13) % 11) / 10); // each cube its own height, like pixels
-      const ripple = 1 + 0.22 * Math.sin(now / 260 - f * 9) * (1 - k * 0.5);
-      const h = Math.max(0.15, c.y * rise * ripple * jitter);
-      _vp.set(c.x + GAP / 2 + (i + 0.5) * cw, h / 2, c.z + GAP / 2 + (j + 0.5) * cd);
-      _vs.set(cw * 0.78, h, cd * 0.78);
-      _vm.compose(_vp, _vq, _vs); vox.setMatrixAt(n, _vm);
-      _vc.copy(col).multiplyScalar(0.6 + 0.5 * k + 0.9 * Math.max(0, 1 - Math.abs(t - 1))); // the wave front glows
-      vox.setColorAt(n, _vc); n++;
-    }
-  }
-  vox.count = n; vox.instanceMatrix.needsUpdate = true; if (vox.instanceColor) vox.instanceColor.needsUpdate = true;
-}
-
-// ---------- the search party: choppers with spotlights fly to whatever just grew and drop bricks on it ----------
-const crew = { units: [], jobs: [], bricks: [], group: new THREE.Group() };
+// ---------- the search party: choppers with spotlights hover over whatever is still being counted; detail ripples up under the beam ----------
+const crew = { units: [], jobs: [], group: new THREE.Group() };
 scene.add(crew.group);
-const brickGeo = new THREE.BoxGeometry(1.4, 1.0, 1.4);
 let _poolTex = null;
 function poolTex() { // radial spotlight landing: hot centre, soft edge
   if (_poolTex) return _poolTex;
@@ -297,16 +263,11 @@ function makeChopper(i) {
   const light = new THREE.SpotLight('#FFE9B8', 34, 80, 0.4, 0.7, 1.6); light.position.set(0, -1, 0); g.add(light); g.add(light.target); light.target.position.set(0, -30, 0);
   g.scale.setScalar(1.5);
   crew.group.add(g);
-  return { g, rotor, rotor2, cone, core, beam, pool, light, x: (Math.random() - 0.5) * 80, z: (Math.random() - 0.5) * 50, y: 30, vx: 0, vz: 0, phase: Math.random() * 10, job: null, hold: 0, dropT: 0, seed: i };
+  return { g, rotor, rotor2, cone, core, beam, pool, light, x: (Math.random() - 0.5) * 80, z: (Math.random() - 0.5) * 50, y: 30, vx: 0, vz: 0, phase: Math.random() * 10, job: null, hold: 0, rip: 0, seed: i };
 }
 function crewJob() {} // choppers are assigned from scan progress, see crewAssign
 crew.busy = new Set(); // keys of top-level folders still being counted
 function crewAssign(live) { crew.busy = new Set(live.filter((i) => !i.done && i.is_dir).map((i) => i.name)); }
-function spawnBrick(x, y, z) {
-  let b = crew.bricks.find((b) => !b.on);
-  if (!b) { if (crew.bricks.length >= 70) return; b = { m: new THREE.Mesh(brickGeo, new THREE.MeshStandardMaterial({ color: '#4FD1C5', emissive: '#4FD1C5', emissiveIntensity: 0.5, transparent: true })), on: false }; crew.group.add(b.m); crew.bricks.push(b); }
-  b.on = true; b.life = 1.6; b.vy = -2; b.vx = (Math.random() - 0.5) * 6; b.vz = (Math.random() - 0.5) * 6; b.m.position.set(x + (Math.random() - 0.5) * 3, y - 2, z + (Math.random() - 0.5) * 3); b.m.material.opacity = 1; b.m.rotation.set(Math.random(), Math.random(), 0);
-}
 function floorAt(x, z) { // top of whatever block is under this point
   for (const m of byKey.values()) { const c = m.userData.cur; if (x >= c.x && x <= c.x + c.w && z >= c.z && z <= c.z + c.h) return m.position.y + m.scale.y / 2; }
   return 0;
@@ -319,14 +280,16 @@ function updateCrew(dt, now) {
   const taken = new Set(crew.units.map((c) => c.job?.key).filter(Boolean));
   crew.units.forEach((c, i) => {
     // leave when the scan is done or there is nothing left for this unit: climb out and vanish
-    if (!scanning || i >= want) { c.y += 40 * dt; c.g.position.y = c.y; c.x += 30 * dt; c.g.position.x = c.x; c.pool.material.opacity = Math.max(0, c.pool.material.opacity - dt); if (c.y > 140) { crew.group.remove(c.g); scene.remove(c.pool); crew.units.splice(i, 1); } return; }
+    if (!scanning || i >= want) { // leaving: beam off, rotor still turning, climb out
+      c.y += 40 * dt; c.g.position.y = c.y; c.x += 30 * dt; c.g.position.x = c.x; c.rotor.rotation.y = now / 22; c.rotor2.rotation.y = now / 22 + Math.PI / 2;
+      const f = 1 - Math.exp(-dt * 6); c.cone.material.opacity *= 1 - f; c.core.material.opacity *= 1 - f; c.light.intensity *= 1 - f; c.pool.material.opacity = Math.max(0, c.pool.material.opacity - dt * 3); if (c.y > 140) { crew.group.remove(c.g); scene.remove(c.pool); crew.units.splice(i, 1); } return; }
     // drop a finished folder; after a while, rotate to another untaken one so the party roams
     if (c.job && (!crew.busy.has(c.job.key) || !byKey.has(c.job.key))) { taken.delete(c.job.key); c.job = null; }
     if (c.job && c.hold > 7) { const other = [...crew.busy].find((k) => !taken.has(k) && byKey.has(k)); if (other) { taken.delete(c.job.key); c.job = null; } }
     if (!c.job) {
       const count = (k) => crew.units.filter((u) => u.job?.key === k).length;
       const k = [...crew.busy].filter((k) => byKey.has(k)).sort((x, y) => count(x) - count(y))[0];
-      if (k) { c.job = { key: k }; c.hold = 0; taken.add(k); }
+      if (k) { c.job = { key: k }; c.hold = 0; c.rip = 0; taken.add(k); }
     }
     let tx, tz, ty = 30;
     if (c.job) { const r = byKey.get(c.job.key).userData.cur; const off = Math.min(r.w, r.h) * 0.22; tx = r.x + r.w / 2 + Math.cos(c.phase + now / 4000) * off; tz = r.z + r.h / 2 + Math.sin(c.phase + now / 4000) * off; ty = 20 + Math.min(10, byKey.get(c.job.key).scale.y * 0.4); }
@@ -335,7 +298,7 @@ function updateCrew(dt, now) {
     c.vx += ax * dt; c.vz += az * dt; c.x += c.vx * dt; c.z += c.vz * dt;
     c.y = smooth(c.y, ty + Math.sin(now / 700 + c.phase) * 0.8, 1 - Math.exp(-dt * 2));
     const near = c.job && Math.hypot(tx - c.x, tz - c.z) < 6;
-    if (near) { c.hold += dt; c.dropT += dt; if (c.dropT > 0.45) { c.dropT = 0; spawnBrick(c.x, c.y, c.z); } }
+    if (near) c.hold += dt;
     c.g.position.set(c.x, c.y, c.z);
     const speed = Math.hypot(c.vx, c.vz);
     if (speed > 0.5) c.g.rotation.y = smooth(c.g.rotation.y, Math.atan2(-c.vz, c.vx), 1 - Math.exp(-dt * 4));
@@ -344,21 +307,43 @@ function updateCrew(dt, now) {
     // beam sways a little while hovering, snaps straight down while travelling
     c.beam.rotation.x = smooth(c.beam.rotation.x, near ? Math.sin(now / 900 + c.phase) * 0.12 : 0, 1 - Math.exp(-dt * 3));
     c.beam.rotation.z = smooth(c.beam.rotation.z, near ? Math.cos(now / 1100 + c.phase) * 0.12 : 0, 1 - Math.exp(-dt * 3));
-    c.cone.material.opacity = near ? 0.4 : 0.2; c.core.material.opacity = near ? 0.6 : 0.3; c.light.intensity = near ? 120 : 50;
+    c.cone.material.opacity = near ? 0.22 : 0.12; c.core.material.opacity = near ? 0.32 : 0.18; c.light.intensity = near ? 28 : 12; // a torch, not a floodlight: the stacks keep their own colour
     c.light.target.position.set(0, -c.y, 0);
     // pool of light where the beam lands, sized by height, sitting on the block top
     const px = c.x + Math.sin(c.beam.rotation.z) * c.y * 0.6, pz = c.z - Math.sin(c.beam.rotation.x) * c.y * 0.6;
     c.pool.position.set(px, floorAt(px, pz) + 0.15, pz); const ps = 0.55 + c.y / 40; c.pool.scale.set(ps, ps, 1);
     c.pool.material.opacity = near ? 0.75 : 0.35;
   });
-  for (const b of crew.bricks) {
-    if (!b.on) continue;
-    b.vy -= 90 * dt; b.m.position.x += b.vx * dt; b.m.position.z += b.vz * dt; b.m.position.y += b.vy * dt; b.m.rotation.x += dt * 3;
-    const floor = floorAt(b.m.position.x, b.m.position.z) + 0.5;
-    if (b.m.position.y < floor) { b.m.position.y = floor; b.vy = -b.vy * 0.3; b.vx *= 0.5; b.vz *= 0.5; b.life -= 0.5; }
-    b.life -= dt; b.m.material.opacity = Math.max(0, Math.min(1, b.life));
-    if (b.life <= 0) { b.on = false; b.m.position.y = -50; }
+}
+// ---- reveal ripple: under each spotlight, small cubes ripple outward across the folder being counted, like detail surfacing under the light
+const RIP_MAX = 3000, RIP_CELL = 3;
+const rip = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.15, emissive: '#FFFFFF', emissiveIntensity: 0.08 }), RIP_MAX);
+rip.instanceMatrix.setUsage(THREE.DynamicDrawUsage); rip.count = 0; scene.add(rip);
+const _rm = new THREE.Matrix4(), _rq = new THREE.Quaternion(), _rp = new THREE.Vector3(), _rs = new THREE.Vector3(), _rc = new THREE.Color(), _white = new THREE.Color('#FFF6E0');
+function updateRipples(dt, now) {
+  let n = 0;
+  if (scanning) for (const c of crew.units) {
+    const m = c.job && byKey.get(c.job.key); if (!m || m.userData.dying) continue;
+    const r = m.userData.cur, top = m.position.y + m.scale.y / 2;
+    const near = c.hold > 0; if (!near) continue;
+    c.rip += dt;
+    const px = Math.min(r.x + r.w - 1, Math.max(r.x + 1, c.pool.position.x)), pz = Math.min(r.z + r.h - 1, Math.max(r.z + 1, c.pool.position.z));
+    const R = Math.hypot(r.w, r.h) * 0.5, period = 2.4, t = (c.rip % period) / period, ring = t * R;
+    const cell = Math.max(1.2, Math.min(RIP_CELL, Math.min(r.w, r.h) / 7)); // small live cells still get a fine grain
+    const nx = Math.max(2, Math.round(r.w / cell)), nz = Math.max(2, Math.round(r.h / cell)), cw = r.w / nx, cd = r.h / nz;
+    const col = m.material.color;
+    for (let i = 0; i < nx && n < RIP_MAX; i++) for (let j = 0; j < nz && n < RIP_MAX; j++) {
+      const cx = r.x + (i + 0.5) * cw, cz = r.z + (j + 0.5) * cd, d = Math.hypot(cx - px, cz - pz);
+      const wave = Math.exp(-((d - ring) ** 2) / 10) * (1 - t * 0.55); // one ring travelling out from the light, fading as it spreads
+      const glow = Math.max(0, 1 - d / (R * 0.45)) * 0.35 * (0.6 + 0.4 * Math.sin(now / 260 + i * 0.9 + j * 1.3)); // shimmer right under the beam
+      const h = wave * 2.4 + glow;
+      if (h < 0.15) continue;
+      _rp.set(cx, top + h / 2, cz); _rs.set(cw * 0.66, h, cd * 0.66);
+      _rm.compose(_rp, _rq, _rs); rip.setMatrixAt(n, _rm);
+      _rc.copy(col).lerp(_white, Math.min(0.45, wave * 0.4 + glow * 0.3)); rip.setColorAt(n, _rc); n++;
+    }
   }
+  rip.count = n; rip.instanceMatrix.needsUpdate = true; if (rip.instanceColor) rip.instanceColor.needsUpdate = true;
 }
 // ---- escort: one chopper that flies in to shine on whatever you pick, and stays until you let go
 crew.escort = null;
@@ -400,7 +385,7 @@ function crewLift(m, u, dt) {
   if (scanning) for (const c of crew.units) { if (!c.job) continue; const d = Math.hypot(u.cur.x + u.cur.w / 2 - c.x, u.cur.z + u.cur.h / 2 - c.z); k = Math.max(k, Math.exp(-(d * d) / 120)); }
   u.kick = smooth(u.kick ?? 0, k, 1 - Math.exp(-dt * 8));
   if (u.kick < 0.002) return;
-  m.position.y += u.kick * 1.2; m.material.emissiveIntensity += u.kick * 0.12;
+  m.position.y += u.kick * 1.2;
 }
 
 // ---------- sparks: a burst when you explode into a folder ----------
@@ -446,7 +431,7 @@ function updateDust(dt, now) {
   p.needsUpdate = true;
 }
 
-// ---------- home flyers: Du's choppers and Me's rocket cruise the idle field while you decide ----------
+// ---------- home flyers: Di's choppers and Me's rocket cruise the idle field while you decide ----------
 const home = { chops: [], rocketOn: false, on: false };
 function updateHomeFlyers(dt, now) {
   const want = !$('#landing').hidden && !$('#landing').classList.contains('away');
@@ -500,7 +485,7 @@ function updateHomeFlyers(dt, now) {
   }
 }
 
-// ---------- earth: Du works over a city at dusk, Me flies in space ----------
+// ---------- earth: Di works over a city at dusk, Me flies in space ----------
 const sky = new THREE.Mesh(new THREE.SphereGeometry(1100, 32, 16), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
   uniforms: { top: { value: new THREE.Color('#0A0F22') }, mid: { value: new THREE.Color('#2A2246') }, horizon: { value: new THREE.Color('#5E3A38') } },
@@ -571,7 +556,10 @@ let filter = params.get('f') || ''; // '', flagged, junk, large, stale, idle
 let idleDays = Math.min(365, Math.max(0, +params.get('d') || 0)); // idle slider threshold; 0 = off
 if (filter === 'idle' && !idleDays) filter = '';
 const FILTER_COLOR = TIER_COLOR; // 'flagged' and 'idle' keep per-item colors
+const hiddenPaths = new Map(); // path -> node, things you told Di to keep off the map for this scan
+const hiddenUnder = (p) => [...hiddenPaths.keys()].some((h) => p === h || p.startsWith(h + '/'));
 function matches(n) {
+  if (hiddenPaths.has(n.path)) return false;
   if (!filter || !n.path) return true;
   if (filter === 'idle') return n.is_dir ? (n.idle_size ?? 0) > 0 : ageDays(n) >= idleDays;
   const ok = (c) => filter === 'flagged' || c.tier === filter;
@@ -602,16 +590,15 @@ const parentOf = (p) => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
 
 function entriesFor(kids, { live } = {}) {
   const max = Math.max(1, ...kids.map((k) => k.size));
-  return layoutOf(kids).map((r) => {
+  return (live ? gridOf(kids) : layoutOf(kids)).map((r) => {
     const n = r.item, key = live ? n.name : n.path;
     const gunk = !live && gunkSet.has(n.path);
-    const ageT = filter === 'idle' && n.is_dir ? idleDays / 365 : ageDays(n) / 365; // idle view: folders wear the slider's colour
-    const base = colorMode === 'type' && filter !== 'idle' && n.types ? TYPE_COLOR[dominant(n.types)] : heatColor(Math.min(1, ageT));
-    const color = live ? (n.done ? COL_BLUE : COL_FORM) : n.path === '' ? COL_DIM : FILTER_COLOR[filter] ?? (gunk && filter !== 'idle' && colorMode !== 'type' ? TIER_COLOR[gunkSet.get(n.path).tier] : base);
+    const base = colorMode === 'type' && n.types ? TYPE_COLOR[dominant(n.types)] : heatColor(Math.min(1, ageDays(n) / 365)); // idle view keeps the usual colours; the threshold shows up top instead
+    const color = live ? (colorMode === 'type' && n.types?.some(Boolean) ? TYPE_COLOR[dominant(n.types)] : n.done ? COL_BLUE : COL_FORM) : n.path === '' ? COL_DIM : FILTER_COLOR[filter] ?? (gunk && filter !== 'idle' && colorMode !== 'type' ? TIER_COLOR[gunkSet.get(n.path).tier] : base);
     const sub = live ? (n.done ? fmt(n.size) : `${fmt(n.size)} so far`) : filter === 'idle' ? `${fmt(n.size)} idle` : filter ? `${fmt(n.size)} flagged` : n.is_dir ? `${fmt(n.size)} · ${fmtN(n.files)} files` : fmt(n.size);
     const inner = !live && n.children ? n.children.filter((c) => c.size > 0 && c.path && matches(c)).map((c) => filter ? { ...c, size: matchedSize(c) } : c).slice(0, 16) : null;
     const edge = gunk && !live && filter !== 'idle' ? TIER_COLOR[gunkSet.get(n.path).tier] : null; // flagged items keep a tier-coloured rim even in type mode
-    return { key, name: n.name, sub, node: live ? { ...n, path: n.name } : n, rect: { x: r.x, z: r.z, w: r.w, h: r.h }, y: heightFor(n.size, max), color, edge, em: gunk || filter ? 0.45 : 0.12, pulse: live && !n.done ? true : gunk ? 'slow' : false, inner, fly: live };
+    return { key, name: n.name, sub, node: live ? { ...n, path: n.name } : n, rect: { x: r.x, z: r.z, w: r.w, h: r.h }, y: heightFor(n.size, max), color, edge, em: live ? 0.03 : gunk || filter ? 0.45 : 0.12, pulse: gunk && !live ? 'slow' : false, inner, fly: live };
   });
 }
 
@@ -621,25 +608,35 @@ function fetchView(path) {
   const idle = filter === 'idle' ? `&idle=${idleDays}` : '', key = path + idle;
   if (!views.has(key)) {
     const q = encodeURIComponent(path);
-    views.set(key, Promise.all([api(`/api/tree?path=${q}&depth=2${idle}`), api(`/api/gunk?path=${q}`), api(`/api/summary?path=${q}`), idle ? api(`/api/idle?path=${q}&days=${idleDays}`) : null]).catch((e) => { views.delete(key); throw e; }));
+    views.set(key, Promise.all([api(`/api/tree?path=${q}&depth=2${idle}`), api(`/api/gunk?path=${q}${idle}`), api(`/api/summary?path=${q}`), idle ? api(`/api/idle?path=${q}&days=${idleDays}`) : null]).catch((e) => { views.delete(key); throw e; }));
   }
   return views.get(key);
 }
 let summaryData = null, idleFiles = null;
-let navToken = 0;
+let navToken = 0, navBusy = 0, lastInput = 0;
+const navHist = []; // folders you came from, newest last
+function goBack() { const p = navHist.pop(); if (p !== undefined) navigate(p, { back: true }); }
+addEventListener('pointerdown', () => (lastInput = performance.now()), true);
+addEventListener('keydown', () => (lastInput = performance.now()), true);
 async function navigate(path, opts = {}) {
   const token = ++navToken;
-  const [node, gunk, sum, idleList] = await fetchView(path);
-  if (token !== navToken || mode !== 'disk') return; // switched to Memory while this was loading
+  // a slow open shows as a busy cursor and a line in the hint, so a click never looks ignored
+  const slow = opts.quiet ? null : setTimeout(() => { document.body.classList.add('busy'); $('#hint').textContent = `Di: opening ${path ? path.split('/').pop() : rootName}…`; }, 150);
+  navBusy++;
+  let view; try { view = await fetchView(path); } catch (e) { if ($('#hint').textContent.startsWith('Di: opening')) $('#hint').textContent = `Di: could not open that · ${e.message}`; throw e; } finally { navBusy--; clearTimeout(slow); if (!navBusy) document.body.classList.remove('busy'); }
+  const [node, gunk, sum, idleList] = view;
+  if (token !== navToken || mode !== 'disk') return; // a newer click or a switch to Memory beat this one
+  if (current?.path !== undefined && current.path !== path && !opts.back) navHist.push(current.path); // every real move is one Back away
   current = node; gunkList = gunk; summaryData = sum; idleFiles = idleList; gunkSet = new Map(gunk.map((c) => [c.path, c]));
   selected = null; hovered = null;
   let kids = node.children.filter((c) => (c.size > 0 || (c.is_dir && !filter)) && matches(c)); // empty folders are noise under a filter
-  if (filter) kids = kids.map((c) => ({ ...c, size: matchedSize(c) })).sort((x, y) => y.size - x.size); // block area = matched bytes, not whole folder
+  if (filter) kids = kids.map((c) => ({ ...c, size: matchedSize(c), full_size: c.size })).sort((x, y) => y.size - x.size); // block area = matched bytes, not whole folder; full_size keeps the whole
   const entries = entriesFor(kids);
   const to = opts.toPath ? entries.find((e) => e.key === opts.toPath)?.rect : opts.to;
   setBlocks(entries, { from: opts.from, to, stagger: opts.stagger });
   renderCrumbs(); renderStats(); renderSidebar();
   if (opts.highlight) flash(opts.highlight);
+  if ($('#hint').textContent.startsWith('Di: opening')) $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
   history.replaceState(null, '', (filter ? `?f=${filter}${filter === 'idle' ? `&d=${idleDays}` : ''}` : location.pathname) + '#' + path);
 }
 function flash(path) {
@@ -662,7 +659,7 @@ function enter(m) {
 }
 
 // ---------- picking ----------
-const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(-2, -2);
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(-2, -2); mouse.px = 0; mouse.py = 0; // px/py: last pointer position in pixels
 let downAt = null;
 const tip = $('#tip');
 let tipX = 0, tipY = 0;
@@ -682,26 +679,29 @@ function showTip(n) {
   tip.hidden = false; placeTip();
 }
 renderer.domElement.addEventListener('pointermove', (e) => { mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); tipX = e.clientX; tipY = e.clientY; if (!tip.hidden) placeTip(); });
-renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; stopTour(); if (camGoal?.home || camGoal?.hold) camGoal = null; });
+renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; if (camGoal?.home || camGoal?.hold) camGoal = null; });
 renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  if (e.button !== 0 || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
   if (mode === 'mem') { if (orbit.on && orbit.hover) openDrawer(orbit.hover); return; }
   if (!hovered) { setSelected(null); return; }
   if (hovered.userData.node.is_dir) enter(hovered); else setSelected(hovered);
 });
 renderer.domElement.addEventListener('pointerleave', () => { mouse.set(-2, -2); tip.hidden = true; });
-addEventListener('keydown', (e) => { if (e.key === ' ' && mode === 'mem' && memView === 'orbit' && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); orbit.frozen = !orbit.frozen; toast(orbit.frozen ? 'Me: holding still · space to resume' : 'Me: live again', 'me'); $('#pause').setAttribute('aria-pressed', String(orbit.frozen)); $('#pause').textContent = orbit.frozen ? 'Paused' : 'Pause'; return; }
+let rotHold = false; // space during a scan: hold the slow lap still
+addEventListener('keydown', (e) => { if (e.key === ' ' && mode === 'disk' && scanning && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); rotHold = !rotHold; toast(rotHold ? 'Di: holding the camera · space to resume' : 'Di: circling again', 'du'); return; }
+  if (e.key === ' ' && mode === 'mem' && memView === 'orbit' && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); orbit.frozen = !orbit.frozen; toast(orbit.frozen ? 'Me: holding still · space to resume' : 'Me: live again', 'me'); $('#pause').setAttribute('aria-pressed', String(orbit.frozen)); $('#pause').textContent = orbit.frozen ? 'Paused' : 'Pause'; return; }
   if (e.key === '/' && mode === 'mem' && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); $('#memq').focus(); return; }
   if (e.key === 'Escape' && document.activeElement === $('#memq')) { $('#memq').value = ''; memFilter.q = ''; refilter(); $('#memq').blur(); return; }
   if (e.key === 'm' && mode === 'disk' && hog.returnTo && document.activeElement?.tagName !== 'INPUT') { const to = hog.returnTo; hog.returnTo = null; hog.pendingSel = to.pid; enterHog(); return; }
-  if ((e.key === 'Escape' || e.key === 'Backspace') && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); if (mode === 'mem') closeDrawer(); else if (tour.on) stopTour(); else selected ? setSelected(null) : goUp(); } });
+  if (dlg.open || gearEl.open || resetEl.open) return;
+  if (e.key === 'Escape' && ru.open) { ruClose(); return; }
+  if ((e.key === 'Escape' || e.key === 'Backspace') && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); if (mode === 'mem') closeDrawer(); else selected ? setSelected(null) : goUp(); } });
 
 function setSelected(m) {
   selected = m;
   if (m) escortTo(m.userData.entry.key); else escortRelease();
   if (!current) return; // nothing to render outside the disk map
   renderFocus(); renderDisk();
-  for (const r of $('#inside').children) r.classList.toggle('on', !!m && r.dataset.key === m.userData.entry.key);
 }
 function updateHover() {
   ray.setFromCamera(mouse, camera);
@@ -712,7 +712,6 @@ function updateHover() {
   if (hovered?.userData.node.is_dir && !scanning) fetchView(hovered.userData.node.path).catch(() => {});
   renderer.domElement.style.cursor = hovered ? 'pointer' : '';
   showTip(hovered && !scanning ? hovered.userData.node : null);
-  for (const r of $('#inside').children) r.classList.toggle('hl', !!hovered && r.dataset.key === hovered.userData.entry.key);
   if (scanning) return;
   $('#hint').textContent = hovered ? `${hovered.userData.node.name} · ${fmt(hovered.userData.node.size)} · ${fmtAge(ageDays(hovered.userData.node))}` : 'Click a folder to open it. Right-click for more. Esc goes back.';
 }
@@ -728,10 +727,26 @@ function showMenu(x, y, n) {
   add(n.is_dir ? 'Open in Finder' : 'Reveal in Finder', () => api('/api/open', { path: n.path }).catch((e) => toast(e.message)));
   if (n.is_dir && n.path !== current.path) add('Explore here', () => { const m = byKey.get(n.path); m ? enter(m) : navigate(n.path); });
   add('Copy path', () => navigator.clipboard?.writeText(rootPath + '/' + n.path).then(() => toast('Path copied')));
+  if (n.path) add('Send to Ru', () => ruTake(n.path, 'menu'));
+  if (n.path && n.path !== current.path) add('Hide from map', () => { hiddenPaths.set(n.path, n); for (const [p] of picked) if (p === n.path || p.startsWith(n.path + '/')) picked.delete(p); saveState(); navigate(current.path); toast(`Di: ${n.name} hidden · ${fmt(n.size)}`, 'du'); });
   const w = menu.offsetWidth, h = menu.offsetHeight;
   menu.style.left = `${Math.min(x, innerWidth - w - 8)}px`; menu.style.top = `${Math.min(y, innerHeight - h - 8)}px`;
 }
 function hideMenu() { menu.hidden = true; }
+function renderHidden() { // pill on the stats line; the line is rebuilt on every render so the button is too
+  const n = hiddenPaths.size; if (!n) return;
+  const b = document.createElement('button'); b.id = 'hid'; b.type = 'button'; b.title = 'Things you hid from the map';
+  b.textContent = `${n} hidden · ${fmt([...hiddenPaths.values()].reduce((s, x) => s + x.size, 0))}`; b.onclick = showHiddenList;
+  $('#stats').appendChild(b);
+}
+function showHiddenList(e) {
+  tip.hidden = true; menu.innerHTML = ''; menu.hidden = false;
+  const add = (label, fn, cls = '') => { const b = document.createElement('button'); b.className = cls; b.textContent = label; b.onclick = () => { hideMenu(); fn(); }; menu.appendChild(b); };
+  const t = document.createElement('div'); t.className = 't'; t.textContent = 'Hidden from the map · click to bring back'; menu.appendChild(t);
+  for (const [p, x] of hiddenPaths) add(`${x.name} · ${fmt(x.size)}`, () => { hiddenPaths.delete(p); saveState(); navigate(current.path); });
+  add('Bring all back', () => { hiddenPaths.clear(); saveState(); navigate(current.path); }, 'hot');
+  const r = e.currentTarget.getBoundingClientRect(); menu.style.left = `${Math.min(r.left, innerWidth - menu.offsetWidth - 8)}px`; menu.style.top = `${r.bottom + 6}px`;
+};
 addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) hideMenu(); }, true);
 addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMenu(); }, true);
 renderer.domElement.addEventListener('contextmenu', (e) => {
@@ -749,6 +764,8 @@ $('#panel').addEventListener('contextmenu', (e) => {
 // ---------- chrome ----------
 function renderCrumbs() {
   const parts = current?.path ? current.path.split('/') : [];
+  const im = $('#idlemark'); im.hidden = !(filter === 'idle' && mode === 'disk' && !scanning);
+  if (!im.hidden) im.innerHTML = `untouched ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+<small>inside ${current?.path ? current.name : rootName}</small>`;
   const el = $('#crumbs'); el.innerHTML = '';
   const home = document.createElement('button'); home.className = 'home'; home.title = 'Scan a different drive or folder'; home.setAttribute('aria-label', home.title);
   home.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 11 12 4l8.5 7M5.5 9.5V20h13V9.5"/></svg>';
@@ -769,19 +786,20 @@ function renderCrumbs() {
   const r = document.createElement('button'); r.className = 'rescan';
   r.title = parts.length ? 'Scan this folder as the new root' : 'Scan again';
   r.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg>' + (parts.length ? 'Rescan here' : 'Rescan');
-  r.onclick = () => startScan(rootPath + (current.path ? '/' + current.path : ''));
+  r.onclick = () => startScan(rootPath + '/' + current.path); // rootPath is '' for a root scan, so always join with '/'
   el.appendChild(r);
 }
 let drive = null; // drive holding the scan root
 async function loadDrive() {
   const list = await api('/api/drives');
-  drive = list.filter((d) => rootPath === d.mount || rootPath.startsWith(d.mount === '/' ? '/' : d.mount + '/')).sort((x, y) => y.mount.length - x.mount.length)[0] ?? null;
+  const rp = rootPath || '/';
+  drive = list.filter((d) => rp === d.mount || rp.startsWith(d.mount === '/' ? '/' : d.mount + '/')).sort((x, y) => y.mount.length - x.mount.length)[0] ?? null;
 }
 function renderDisk() {
   const el = $('#disk');
   if (!drive || !current) { el.hidden = true; return; }
   const n = selected ? selected.userData.node : current;
-  const sel = Math.min(n.size, drive.total), free = drive.available, oth = Math.max(0, drive.total - free - sel);
+  const sel = Math.min(n.full_size ?? n.size, drive.total), free = drive.available, oth = Math.max(0, drive.total - free - sel);
   const pct = (v) => `${(v / drive.total * 100).toFixed(v / drive.total < 0.1 ? 1 : 0)}%`;
   el.hidden = false;
   el.innerHTML = `<div class="cap"><i class="sel${free / drive.total < 0.1 ? ' lo' : ''}"></i><i class="oth"></i></div><div></div>`;
@@ -795,10 +813,12 @@ function renderStats() {
   $('#stats').title = 'Live: the map updates when files change on disk';
   if (filter) { const shown = current.children.filter((c) => c.path && matches(c)); t += ` · ${filter === 'idle' ? `idle ${idleDays}+ days: ` : 'showing '}${shown.length} of ${current.children.filter((c) => c.path).length} (${fmt(shown.reduce((s, c) => s + matchedSize(c), 0))})`; }
   $('#stats').textContent = t; $('#stats').insertAdjacentHTML('beforeend', '<span class="dot" aria-label="live"></span>');
+  if (mapAsOf) { const a = document.createElement('span'); a.className = 'asof'; a.textContent = `map from ${ago(mapAsOf)} · Rescan for fresh sizes`; a.title = 'Opened from the last snapshot. Changes since then are picked up live, but sizes are as of that scan.'; $('#stats').appendChild(a); }
+  renderHidden();
 }
 $('#legend').onclick = (e) => {
   const b = e.target.closest('button[data-f]'); if (!b || scanning || !current) return;
-  filter = b.dataset.f; idleDays = 0;
+  filter = b.dataset.f; idleDays = 0; saveState();
   syncFilterButtons();
   navigate(current.path);
 };
@@ -810,7 +830,7 @@ function syncColorMode() {
 }
 $('#colors').onclick = (e) => {
   const b = e.target.closest('button[data-m]'); if (!b) return;
-  colorMode = b.dataset.m; try { localStorage.setItem('dume.color', colorMode); } catch {}
+  colorMode = b.dataset.m; try { localStorage.setItem('dime.color', colorMode); } catch {} saveState();
   syncColorMode(); if (current && !scanning) navigate(current.path);
 };
 syncColorMode();
@@ -821,43 +841,32 @@ function syncFilterButtons() {
 }
 let idleTimer;
 $('#idle').oninput = (e) => {
-  idleDays = +e.target.value; filter = idleDays ? 'idle' : '';
+  idleDays = +e.target.value; filter = idleDays ? 'idle' : ''; saveState();
   syncFilterButtons();
   clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (current && !scanning) navigate(current.path); }, 120);
 };
 syncFilterButtons();
 
-$('#tabs').onclick = (e) => {
-  const b = e.target.closest('button'); if (!b) return;
-  for (const t of $('#tabs').children) t.setAttribute('aria-selected', t === b);
-  $('#v-clean').hidden = b.dataset.v !== 'clean'; $('#v-explore').hidden = b.dataset.v !== 'explore';
-};
-
 let gunkList = [];
 const under = (p, dir) => dir === '' || p === dir || p.startsWith(dir + '/');
 const flaggedUnder = (dir) => gunkList.filter((c) => under(c.path, dir)).reduce((s, c) => s + c.size, 0);
-const nodeInfo = (n) => `${fmt(n.size)}${n.is_dir ? ` · ${fmtN(n.files)} files` : ''} · ${fmtAge(ageDays(n))}`;
+const nodeInfo = (n) => `${fmt(n.size)}${n.full_size != null && n.full_size !== n.size ? ` ${filter === 'idle' ? 'idle' : 'flagged'} of ${fmt(n.full_size)}` : ''}${n.is_dir ? ` · ${fmtN(n.files)} files` : ''} · ${fmtAge(ageDays(n))}`;
 
 const filterLabel = () => ({ safe: 'safe to remove', likely: 'probably safe', review: 'worth a look', flagged: 'flagged' })[filter] ?? '';
-function renderSidebar() { renderFocus(); renderInside(); renderGunk(); renderCleanup(); }
-
-// ---- tour: fly through the biggest cleanup targets, one every few seconds
-const tour = { on: false, token: 0 };
-async function startTour() {
-  const stops = [...gunkList].filter((c) => tiersOn.has(c.tier)).sort((a, b) => b.size - a.size).slice(0, 5);
-  if (!stops.length) return;
-  tour.on = true; const token = ++tour.token; renderCleanup();
-  $('#hint').textContent = 'Du: touring the biggest cleanup targets. Click anywhere or press Esc to stop.';
-  for (const [i, c] of stops.entries()) {
-    if (!tour.on || token !== tour.token) return;
-    toast(`Du · ${i + 1}/${stops.length} · ${c.name} · ${fmt(c.size)} · ${TIER_LABEL[c.tier]}: ${c.note}`, 'du');
-    await navigate(parentOf(c.path), { highlight: c.path });
-    const m = byKey.get(c.path); if (m) { dive(m.userData.target, false); burst(m.userData.target); }
-    await sleep(3200);
-  }
-  if (tour.on && token === tour.token) { tour.on = false; toast('Du: that is the lot', 'du'); await navigate(''); renderCleanup(); }
-}
-function stopTour() { if (!tour.on) return; tour.on = false; tour.token++; toast('Du: tour stopped', 'du'); renderCleanup(); }
+function renderSidebar() { $('#back').hidden = !navHist.length; renderFocus(); renderCleanup(); }
+$('#back').onclick = goBack;
+function showTab(v) { for (const t of $('#tabs').children) t.setAttribute('aria-selected', String(t.dataset.v === v)); $('#v-clean').hidden = v !== 'clean'; $('#v-browse').hidden = v !== 'browse'; }
+$('#tabs').onclick = (e) => { const b = e.target.closest('button[data-v]'); if (b) showTab(b.dataset.v); };
+// drag the panel's left edge to widen it; the map chrome follows via --pw
+{ const setW = (w) => document.documentElement.style.setProperty('--pw', `${w}px`);
+  try { const w = +localStorage.getItem('dime.panelw'); if (w) setW(Math.min(w, innerWidth - 300)); } catch {}
+  const g = $('#grip');
+  g.onpointerdown = (e) => {
+    e.preventDefault(); g.setPointerCapture(e.pointerId); g.classList.add('on'); document.body.style.cursor = 'col-resize';
+    let w = $('#panel').offsetWidth;
+    g.onpointermove = (ev) => { w = Math.round(Math.min(Math.max(300, innerWidth - 16 - ev.clientX), innerWidth - 300)); setW(w); };
+    g.onpointerup = () => { g.onpointermove = g.onpointerup = null; g.classList.remove('on'); document.body.style.cursor = ''; try { localStorage.setItem('dime.panelw', w); } catch {} };
+  }; }
 
 const tiersOn = new Set(['safe', 'likely', 'review']);
 const TIER_ORDER = { safe: 0, likely: 1, review: 2 };
@@ -865,191 +874,276 @@ const KIND_HINT = {
   cache: 'Recreated on the next build or install', appcache: 'Apps rebuild these as needed', simulator: 'Xcode re-downloads what you use', trash: 'Empty the Trash to reclaim',
   build: 'Regenerated by the next build', logs: 'Old logs are rarely needed', downloads: 'Untouched for over a month', installer: 'Done with once installed or extracted',
   duplicate: 'Same name and size elsewhere', diskimage: 'Virtual disks, often oversized', project: 'No changes for six months or more', large: 'Over 100 MB each', stale: 'Over 10 MB and idle six months',
-  archives: 'Old app builds from Xcode', models: 'Re-downloaded on demand', backups: 'Manage from Finder',
+  archives: 'Old app builds from Xcode', models: 'Re-downloaded on demand', backups: 'Manage from Finder', idlefile: 'Not opened or changed for that long', ru: 'Nominated by Ru',
 };
 const specific = (note) => /Idle|Same name|No changes/.test(note);
-const openKinds = new Set();
-function renderIdleCleanup() {
-  const head = $('#clean-head'), tiers = $('#clean-tiers'), groups = $('#clean-groups');
-  const kids = current.children.filter((c) => c.path && matchedSize(c) > 0).map((c) => ({ ...c, idle: matchedSize(c) })).sort((x, y) => y.idle - x.idle);
-  const total = current.idle_size ?? kids.reduce((s, c) => s + c.idle, 0);
-  head.innerHTML = `<div class="big"></div><div class="scope"></div>`;
-  head.querySelector('.big').innerHTML = total ? `${fmt(total)}<small>untouched for ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+</small>` : `Nothing idle<small>that long</small>`;
-  const scope = head.querySelector('.scope');
-  scope.textContent = `${current.path ? `in ${current.name}` : `in ${rootName}`} · ${kids.length} of ${current.children.filter((c) => c.path).length} items · `;
-  const back = document.createElement('button'); back.textContent = 'show everything'; back.onclick = () => { idleDays = 0; filter = ''; syncFilterButtons(); navigate(current.path); }; scope.appendChild(back);
-  tiers.innerHTML = ''; groups.innerHTML = '';
-  if (!kids.length) { groups.innerHTML = '<div class="empty">Everything here was touched more recently. Move the slider left.</div>'; return; }
-  const base = current.path ? current.path + '/' : '';
-  const files = idleFiles ?? [];
-  kids.forEach((c, i) => {
-    const inside = c.is_dir ? files.filter((f) => f.path.startsWith(c.path + '/')).slice(0, 8) : [];
-    const d = document.createElement('details'); d.className = 'grp'; d.style.setProperty('--c', '#' + heatColor(Math.min(1, idleDays / 365)).getHexString());
-    d.open = openKinds.size ? openKinds.has(c.path) : i < 2;
-    d.ontoggle = () => (d.open ? openKinds.add(c.path) : openKinds.delete(c.path));
-    d.innerHTML = `<summary><span class="tbar"></span><div><div class="what"></div><div class="why"></div></div><div><div class="tot"></div><div class="cnt"></div></div></summary>`;
-    d.querySelector('.what').textContent = c.name; d.querySelector('.what').classList.toggle('dir', c.is_dir);
-    d.querySelector('.why').textContent = c.is_dir ? `${Math.round((c.idle / c.size) * 100)}% of ${fmt(c.size)} is idle` : fmtAge(ageDays(c));
-    d.querySelector('.tot').textContent = fmt(c.idle); d.querySelector('.cnt').textContent = inside.length ? 'biggest idle files' : '';
-    d.querySelector('summary').onclick = (e) => { if (e.metaKey || e.ctrlKey) { e.preventDefault(); const m = byKey.get(c.path); c.is_dir ? (m ? enter(m) : navigate(c.path)) : m && setSelected(m); } };
-    d.querySelector('summary').onmouseenter = () => (rowHover = c.path); d.querySelector('summary').onmouseleave = () => (rowHover = null);
-    for (const f of inside) {
-      const rel = f.path.slice(base.length + c.name.length + 1);
-      const row = document.createElement('div'); row.className = 'row'; row.dataset.key = f.path; row.tabIndex = 0;
-      row.innerHTML = `<div><div class="name"></div><div class="sub"></div></div><div class="sz"></div><button class="fb" type="button">Finder</button>`;
-      row.querySelector('.name').textContent = f.name;
-      row.querySelector('.sub').textContent = [parentOf(rel), fmtAge(f.age_days)].filter(Boolean).join(' · ');
-      row.querySelector('.sz').textContent = fmt(f.size);
-      row.querySelector('.fb').onclick = (e) => { e.stopPropagation(); api('/api/open', { path: f.path }).catch((err) => toast(err.message)); };
-      row.onmouseenter = () => (rowHover = c.path); row.onmouseleave = () => (rowHover = null);
-      row.onclick = () => navigate(parentOf(f.path), { highlight: f.path });
-      row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
-      d.appendChild(row);
-    }
-    if (c.is_dir) {
-      const go = document.createElement('div'); go.className = 'row'; go.innerHTML = `<div><div class="sub"></div></div>`;
-      go.querySelector('.sub').textContent = `Open ${c.name} on the map`; go.querySelector('.sub').style.color = 'var(--teal)';
-      go.onclick = () => { const m = byKey.get(c.path); m ? enter(m) : navigate(c.path); };
-      d.appendChild(go);
-    }
-    groups.appendChild(d);
-  });
-}
+const openKinds = new Set(); let kindsTouched = false; // once you fold or unfold a group yourself, the default 'first two open' stops applying
 
+// the candidate list the panel works from: Di's flags, and in the idle view only those untouched long enough plus Di's untouched files
+function cleanList() {
+  if (filter !== 'idle') return gunkList;
+  const old = gunkList; // already sized by idle bytes and filtered by the server
+  const inside = (p) => old.some((c) => p === c.path || p.startsWith(c.path + '/')); // a file under a flagged folder is already counted there
+  const files = (idleFiles ?? []).filter((f) => !inside(f.path)).map((f) => ({ path: f.path, name: f.name, size: f.size, is_dir: false, tier: 'review', reason: 'idlefile', what: 'Untouched files', note: `Idle ${f.age_days} days.`, age_days: f.age_days }));
+  return [...old, ...files];
+}
 function renderCleanup() {
-  if (filter === 'idle') return renderIdleCleanup();
   const s = summaryData; if (!s) return;
-  const head = $('#clean-head');
-  const sum = (pred) => s.tiers.filter(pred).reduce((a, t) => a + t[1], 0);
+  const head = $('#clean-head'), list = cleanList(), idle = filter === 'idle';
+  for (const [p] of picked) { const f = list.find((c) => c.path === p); if (f) picked.set(p, f); } // sizes and idle flags match the view you act from
+  // hidden folders drop out, then the headline and cards count only the tiers that are switched on, so they always agree with the list below
+  const kindsAll = (idle
+    ? [...new Set(list.map((c) => c.reason))].map((id) => { const its = list.filter((c) => c.reason === id); return [id, its[0].tier, its[0].what, sumOf(its), its.length]; })
+    : s.kinds).map(([id, tier, what, size, n]) => { const gone = list.filter((c) => c.reason === id && hiddenUnder(c.path)); return [id, tier, what, size - sumOf(gone), n - gone.length]; }).filter((k) => k[4] > 0);
+  const tierOf = (t) => kindsAll.filter((k) => k[1] === t).reduce((a, k) => [a[0] + k[3], a[1] + k[4]], [0, 0]);
+  const tierSums = ['safe', 'likely', 'review'].map((t) => [t, ...tierOf(t)]);
+  const sum = (pred) => tierSums.filter((t) => pred(t) && tiersOn.has(t[0])).reduce((a, t) => a + t[1], 0);
   const easy = sum((t) => t[0] !== 'review'), review = sum((t) => t[0] === 'review');
   head.innerHTML = `<div class="big"></div><div class="scope"></div>`;
   head.querySelector('.big').innerHTML = easy ? `${fmt(easy)}<small>safe to free</small>` : review ? `${fmt(review)}<small>worth a look</small>` : `Nothing to clean<small>here</small>`;
   if (easy && review) head.querySelector('.big').insertAdjacentHTML('afterend', `<div class="plus">plus ${fmt(review)} worth a look</div>`);
-  if (gunkList.length) { const b = document.createElement('button'); b.id = 'tour'; b.className = 'btn sm quiet'; b.textContent = tour.on ? 'Stop tour' : 'Tour the top 5'; b.style.marginTop = '10px'; b.onclick = () => (tour.on ? stopTour() : startTour()); head.appendChild(b); }
+  const vb = document.createElement('button'); vb.id = 'vault'; vb.className = 'btn sm quiet'; vb.textContent = 'Vault'; vb.title = 'Archived items, restorable any time'; vb.style.marginTop = '10px'; vb.onclick = openVault; head.appendChild(vb);
+  api('/api/vault').then((v) => { vaultList = v; if (v.length) vb.textContent = `Vault · ${v.length} · ${fmt(sumOf(v))}`; }).catch(() => {});
+  if (picked.size) { const lb = document.createElement('button'); lb.className = 'btn sm quiet'; lb.textContent = `List · ${picked.size}`; lb.title = 'Review your list; move to the vault or delete from there'; lb.style.marginTop = '10px'; lb.style.marginLeft = '8px'; lb.onclick = () => listDialog([...picked.values()].map(candRow)); head.appendChild(lb); }
+  const xb = document.createElement('button'); xb.className = 'btn sm quiet'; xb.textContent = 'Export'; xb.title = 'Save this cleanup view as a Markdown report'; xb.style.marginTop = '10px'; xb.style.marginLeft = '8px'; xb.onclick = exportReport; head.appendChild(xb);
   const scope = head.querySelector('.scope');
-  scope.textContent = current.path ? `in ${current.name} · ` : `in ${rootName}, ${fmtN(current.files)} files`;
+  scope.textContent = `${idle ? `untouched ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+ · ` : ''}${current.path ? `in ${current.name} · ` : `in ${rootName}, ${fmtN(current.files)} files`}`;
+  if (idle) { const b = document.createElement('button'); b.textContent = 'show everything'; b.onclick = () => { idleDays = 0; filter = ''; syncFilterButtons(); navigate(current.path); }; scope.appendChild(b); scope.append(' · '); }
   if (current.path) { const b = document.createElement('button'); b.textContent = `see whole ${rootName}`; b.onclick = () => navigate(''); scope.appendChild(b); }
   const tiers = $('#clean-tiers'); tiers.innerHTML = '';
-  for (const [tier, size, n] of s.tiers) {
+  for (const [tier, size, n] of tierSums) {
     const b = document.createElement('button'); b.style.setProperty('--c', TIER_HEX[tier]); b.setAttribute('aria-pressed', String(tiersOn.has(tier)));
     b.innerHTML = `<b></b><span class="sw"></span><span></span><div class="n"></div>`;
     b.querySelector('b').textContent = n ? fmt(size) : '—'; b.children[2].textContent = TIER_LABEL[tier]; b.lastChild.textContent = n ? `${n} item${n === 1 ? '' : 's'}` : 'none';
     b.title = { safe: 'Caches, Trash, simulators. Apps recreate these.', likely: 'Old downloads, installers, logs, build output. Glance, then remove.', review: 'Large, idle, duplicates, untouched projects. Your call.' }[tier];
-    b.onclick = () => { tiersOn.has(tier) && tiersOn.size > 1 ? tiersOn.delete(tier) : tiersOn.add(tier); renderCleanup(); };
+    b.onclick = () => { tiersOn.has(tier) && tiersOn.size > 1 ? tiersOn.delete(tier) : tiersOn.add(tier); saveState(); renderCleanup(); };
     tiers.appendChild(b);
   }
   const groups = $('#clean-groups'); groups.innerHTML = '';
-  const kinds = s.kinds.filter((k) => tiersOn.has(k[1])).sort((x, y) => TIER_ORDER[x[1]] - TIER_ORDER[y[1]] || y[3] - x[3]);
+  const kinds = kindsAll.filter((k) => tiersOn.has(k[1])).sort((x, y) => TIER_ORDER[x[1]] - TIER_ORDER[y[1]] || y[3] - x[3]);
   if (!kinds.length) { groups.innerHTML = '<div class="empty">Nothing flagged in this folder. Explore the map or scan somewhere else.</div>'; return; }
   const base = current.path ? current.path + '/' : '';
   kinds.forEach(([id, tier, what, size, n], i) => {
-    const items = gunkList.filter((c) => c.reason === id);
+    const items = list.filter((c) => c.reason === id && !hiddenUnder(c.path));
     const d = document.createElement('details'); d.className = 'grp'; d.style.setProperty('--c', TIER_HEX[tier]);
-    d.open = openKinds.size ? openKinds.has(id) : i < 2;
-    d.ontoggle = () => (d.open ? openKinds.add(id) : openKinds.delete(id));
+    d.open = kindsTouched ? openKinds.has(id) : i < 2;
+    d.ontoggle = () => { kindsTouched = true; d.open ? openKinds.add(id) : openKinds.delete(id); };
     d.innerHTML = `<summary><span class="tbar"></span><div><div class="what"></div><div class="why"></div></div><div><div class="tot"></div><div class="cnt"></div></div></summary>`;
     d.querySelector('.what').textContent = what;
     d.querySelector('.why').textContent = `${TIER_LABEL[tier]} · ${KIND_HINT[id] ?? ''}`;
-    d.querySelector('.tot').textContent = fmt(size); d.querySelector('.cnt').textContent = `${n} item${n === 1 ? '' : 's'}${items.length < n ? ` · top ${items.length}` : ''}`;
-    for (const c of items) {
-      const rel = c.path.startsWith(base) ? c.path.slice(base.length) : c.path;
-      const row = document.createElement('div'); row.className = 'row'; row.dataset.key = c.path; row.tabIndex = 0;
-      row.innerHTML = `<div><div class="name"></div><div class="sub"></div></div><div class="sz"></div><button class="fb" type="button">Finder</button>`;
-      row.querySelector('.name').textContent = c.name; row.querySelector('.name').classList.toggle('dir', c.is_dir);
-      row.querySelector('.sub').textContent = [parentOf(rel), specific(c.note) ? c.note : ''].filter(Boolean).join(' · ');
-      row.querySelector('.sz').textContent = fmt(c.size);
-      row.querySelector('.fb').onclick = (e) => { e.stopPropagation(); api('/api/open', { path: c.path }).catch((err) => toast(err.message)); };
-      row.onmouseenter = () => (rowHover = base + rel.split('/')[0]); row.onmouseleave = () => (rowHover = null);
-      row.onclick = () => navigate(parentOf(c.path), { highlight: c.path });
-      row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
-      d.appendChild(row);
-    }
+    d.querySelector('.tot').textContent = fmt(size); d.querySelector('.cnt').textContent = items.length < n ? `biggest ${items.length} of ${n}` : `${n} item${n === 1 ? '' : 's'}`;
+    const allIn = items.every((c) => picked.has(c.path));
+    const pall = document.createElement('button'); pall.className = 'pall'; pall.type = 'button';
+    pall.textContent = allIn ? 'remove all from list' : 'add all to list';
+    pall.onclick = (e) => { e.preventDefault(); e.stopPropagation(); for (const c of items) allIn ? picked.delete(c.path) : picked.set(c.path, c); renderCleanup(); };
+    d.querySelector('summary').lastElementChild.appendChild(pall);
+    for (const c of items) d.appendChild(candRowEl(c, base, 0));
     groups.appendChild(d);
   });
+  if (!groups.children.length) groups.innerHTML = '<div class="empty">Everything flagged here is hidden from the map.</div>';
+  renderPickBar(); ruSync();
 }
 
+// ---------- act on picks: archive to the vault or delete, always after a look at the list ----------
+const picked = new Map(); // path -> candidate, kept while you browse so you can gather from several folders
+let vaultList = [];
+const sumOf = (rows) => rows.reduce((s, r) => s + r.size, 0);
+function renderPickBar() {
+  saveState();
+  const bar = $('#clean-bar'); bar.hidden = !picked.size; if (!picked.size) return;
+  const n = picked.size;
+  bar.innerHTML = `<div><b></b><button class="clr" type="button">clear list</button></div><button class="btn sm quiet" type="button">Review list</button>`;
+  bar.querySelector('b').textContent = `${n} on your list · ${fmt(sumOf([...picked.values()]))}`;
+  bar.querySelector('.clr').onclick = () => { picked.clear(); saveState(); renderCleanup(); };
+  bar.querySelector('.btn').onclick = () => listDialog([...picked.values()].map(candRow));
+}
+const dlg = $('#dlg');
+// One dialog for every destructive step: a title, the exact list, optional checkboxes, an optional "I understand" gate, then the buttons.
+function openDialog({ title, sub, rows, select, gate, actions }) {
+  dlg.innerHTML = `<div class="head"><div class="title"></div><div class="sub"></div></div><div class="list"></div><label class="gate" hidden><input type="checkbox"><span></span></label><div class="foot"></div>`;
+  dlg.querySelector('.title').textContent = title; dlg.querySelector('.sub').textContent = sub;
+  const list = dlg.querySelector('.list');
+  if (!rows.length) list.innerHTML = '<div class="empty">Nothing here yet.</div>';
+  for (const r of rows) {
+    const el = document.createElement('label'); el.className = 'drow';
+    el.innerHTML = `<input type="checkbox"><div><div class="name"></div><div class="sub"></div></div><div class="sz"></div>`;
+    const cb = el.querySelector('input'); cb.value = r.key; cb.checked = select ? r.checked ?? true : true; cb.hidden = !select; cb.onchange = sync;
+    el.querySelector('.name').textContent = r.name; el.querySelector('.name').classList.toggle('dir', !!r.is_dir);
+    el.querySelector('.sub').textContent = r.sub; el.querySelector('.sz').textContent = fmt(r.size);
+    list.appendChild(el);
+  }
+  const gateEl = dlg.querySelector('.gate');
+  if (gate) { gateEl.hidden = false; gateEl.querySelector('span').textContent = gate; gateEl.querySelector('input').onchange = sync; }
+  const foot = dlg.querySelector('.foot');
+  const cancel = document.createElement('button'); cancel.className = 'btn sm quiet'; cancel.textContent = 'Cancel'; cancel.onclick = () => dlg.close(); foot.appendChild(cancel);
+  const chosen = () => [...list.querySelectorAll('input:checked')].map((c) => rows.find((r) => r.key === c.value));
+  const btns = actions.map((a) => { const b = document.createElement('button'); b.className = `btn sm ${a.cls ?? ''}`; b.onclick = () => { dlg.close(); a.fn(chosen()); }; foot.appendChild(b); return [b, a]; });
+  function sync() { const c = chosen(), ok = c.length && (!gate || gateEl.querySelector('input').checked); for (const [b, a] of btns) { b.disabled = !ok; b.textContent = a.label(c); } }
+  sync(); dlg.showModal();
+}
+const candRow = (c) => ({ key: c.path, name: c.name, is_dir: c.is_dir, size: c.size, sub: [parentOf(c.path) || rootName, c.what, c.full_size != null && c.full_size !== c.size ? `the idle ${fmt(c.size)} of ${fmt(c.full_size)}` : ''].filter(Boolean).join(' · ') });
+// ---- a candidate row: tick it, unfold it in place to tick things inside it, or jump to it on the map. The map's scope never moves on its own.
+const openRows = new Set(), kidCache = new Map(); // expanded paths, and each one's children (keyed by path plus the idle threshold)
+function candRowEl(c, base, depth) {
+  const wrap = document.createDocumentFragment();
+  const rel = c.path.startsWith(base) ? c.path.slice(base.length) : c.path;
+  const row = document.createElement('div'); row.className = 'row pick'; row.dataset.key = c.path; row.tabIndex = 0; row.style.paddingLeft = `${28 + depth * 18}px`;
+  row.innerHTML = `<input class="pk" type="checkbox" aria-label="Add to list" title="Add to your list. Nothing moves until you act from the list."><div><div class="name"></div><div class="sub"></div></div><div class="sz"></div><span class="acts"><button class="mp" type="button" title="Show on the map">Map</button><button class="fb" type="button">Finder</button></span>`;
+  const pk = row.querySelector('.pk'); pk.checked = picked.has(c.path); row.classList.toggle('picked', pk.checked);
+  pk.onclick = (e) => e.stopPropagation(); pk.onchange = () => { pk.checked ? picked.set(c.path, c) : picked.delete(c.path); renderCleanup(); };
+  dragSource(row, c.path);
+  const name = row.querySelector('.name'); name.textContent = c.name; name.classList.toggle('dir', c.is_dir);
+  if (c.is_dir) { row.classList.add('fold'); row.classList.toggle('open', openRows.has(c.path)); }
+  row.querySelector('.sub').textContent = [depth ? '' : parentOf(rel), c.full_size != null && c.full_size !== c.size ? `${fmt(c.size)} idle of ${fmt(c.full_size)} · only those files move` : '', specific(c.note) ? c.note : ''].filter(Boolean).join(' · ');
+  row.querySelector('.sz').textContent = fmt(c.size);
+  row.querySelector('.fb').onclick = (e) => { e.stopPropagation(); api('/api/open', { path: c.path }).catch((err) => toast(err.message)); };
+  row.querySelector('.mp').onclick = (e) => { e.stopPropagation(); navigate(parentOf(c.path), { highlight: c.path }); };
+  row.onmouseenter = () => (rowHover = base + rel.split('/')[0]); row.onmouseleave = () => (rowHover = null);
+  row.onclick = () => { if (!c.is_dir) { pk.checked = !pk.checked; pk.onchange(); return; } openRows.has(c.path) ? openRows.delete(c.path) : openRows.add(c.path); renderCleanup(); };
+  row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
+  wrap.appendChild(row);
+  if (c.is_dir && openRows.has(c.path)) {
+    const key = c.path + (filter === 'idle' ? `@${idleDays}` : ''), kids = kidCache.get(key);
+    if (!kids) {
+      const p = document.createElement('div'); p.className = 'empty'; p.style.paddingLeft = `${46 + depth * 18}px`; p.textContent = 'looking inside…'; wrap.appendChild(p);
+      api(`/api/tree?path=${encodeURIComponent(c.path)}&depth=1${filter === 'idle' ? `&idle=${idleDays}` : ''}`).then((t) => { kidCache.set(key, t.children ?? []); }).catch(() => { kidCache.set(key, []); }).finally(() => { if (openRows.has(c.path)) renderCleanup(); });
+    } else {
+      const idle = filter === 'idle';
+      const list = kids.map((k) => ({ path: k.path, name: k.name, size: idle ? k.idle_size ?? 0 : k.size, full_size: idle ? k.size : undefined, is_dir: k.is_dir, files: k.files, age_days: ageDays(k), tier: c.tier, reason: c.reason, what: c.what, note: `Inside ${c.name}.` })).filter((k) => k.size > 0).sort((x, y) => y.size - x.size);
+      if (!list.length) { const p = document.createElement('div'); p.className = 'empty'; p.style.paddingLeft = `${46 + depth * 18}px`; p.textContent = idle ? 'nothing inside is idle that long' : 'empty'; wrap.appendChild(p); }
+      const show = list.slice(0, 40);
+      for (const k of show) wrap.appendChild(candRowEl(k, base, depth + 1));
+      if (list.length > show.length) { const p = document.createElement('div'); p.className = 'empty'; p.style.paddingLeft = `${46 + depth * 18}px`; p.textContent = `and ${list.length - show.length} smaller, ${fmt(sumOf(list.slice(40)))}`; wrap.appendChild(p); }
+    }
+  }
+  return wrap;
+}
+// your list: the only place a destructive action starts. Ticks only add here; Move to vault (reversible) or Delete (gated) act on what is checked.
+const idleOpt = () => filter === 'idle' ? { idle: idleDays } : {}; // in the idle view only the files that old move or go
+function listDialog(rows, sub) {
+  const idle = filter === 'idle', days = idleDays >= 365 ? 'a year' : `${idleDays} days`;
+  sub ??= `Nothing has moved yet. Checked items are what the buttons act on. Move to vault puts them in ~/.dime/vault, reversible from the Vault${idle ? `, and in this idle view only the files inside each item untouched for ${days}+ move` : ''}. Delete asks again.`;
+  openDialog({ title: 'Your list', sub, rows, select: true, actions: [
+    { cls: 'hot quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the vault.` : 'Removed from disk right away. Not the Trash, not the vault.', rows: c, select: false, gate: 'I understand this cannot be undone. Move to the vault instead if unsure.',
+      actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/delete', { paths: x.map((r) => r.key), ...idleOpt() }, 'deleted') }] }) },
+    { label: (c) => `Move ${c.length} to vault · ${fmt(sumOf(c))}`, fn: (c) => act('/api/vault/archive', { paths: c.map((r) => r.key), ...idleOpt() }, 'moved to the vault') },
+  ] });
+}
+async function openVault() {
+  try { vaultList = await api('/api/vault'); } catch (e) { toast(e.message); return; }
+  const rows = vaultList.map((e) => ({ key: e.id, name: e.name, is_dir: e.is_dir, size: e.size, checked: false, sub: [tilde(parentOf(e.from)), e.partial ? `${e.count} idle file${e.count === 1 ? '' : 's'} out of it, the rest stayed` : '', new Date(e.archived_at * 1000).toLocaleDateString(), e.note].filter(Boolean).join(' · ') }));
+  openDialog({ title: 'Vault', sub: rows.length ? `${rows.length} item${rows.length === 1 ? '' : 's'} · ${fmt(sumOf(rows))} waiting in ~/.dime/vault. Restore puts things back exactly where they were.` : 'Nothing archived yet. Pick items in Cleanup and choose Archive.',
+    rows, select: true,
+    actions: [
+      { label: (c) => `Restore ${c.length}`, fn: (c) => act('/api/vault/restore', { ids: c.map((r) => r.key) }, 'restored') },
+      { cls: 'hot', label: (c) => `Delete forever ${c.length}…`, fn: (c) => openDialog({ title: 'Delete from the vault', sub: 'Removed from the vault and from disk.', rows: c, select: false, gate: 'I understand this cannot be undone.',
+        actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/vault/purge', { ids: x.map((r) => r.key) }, 'deleted') }] }) },
+    ] });
+  if (rows.length) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sm ru'; b.textContent = '✦ Ask Ru'; b.style.marginRight = 'auto'; b.onclick = () => { dlg.close(); ruOpen('vault'); }; dlg.querySelector('.foot').prepend(b); }
+}
+const nestedIn = (p, keys) => keys.some((k) => k !== p && (k === '' || p.startsWith(k + '/')));
+async function act(url, body, verb) {
+  if (body.paths) { const keys = [...new Set(body.paths)]; body.paths = keys.filter((p) => !nestedIn(p, keys)); } // a folder takes what is inside it; sending the child too would only fail
+  let res; try { res = await api(url, body); } catch (e) { toast(`Di: ${e.message}`, 'du'); return; }
+  const ok = res.filter((r) => r.ok), bad = res.filter((r) => !r.ok);
+  for (const [p] of picked) if (ok.some((r) => p === r.key || p.startsWith(r.key + '/'))) picked.delete(p); // the item and anything ticked inside it
+  for (const p of [...ru.sel.keys()]) if (ok.some((r) => p === r.key || p.startsWith(r.key + '/'))) ru.sel.delete(p);
+  toast(bad.length ? `Di: ${ok.length} ${verb}, ${bad.length} failed · ${bad[0].error}` : `Di: ${ok.length} item${ok.length === 1 ? '' : 's'} ${verb}`, 'du');
+  if (!current) { renderPickBar(); return; }
+  if (url !== '/api/vault/purge' && ok.some((r) => current.path === r.key || current.path.startsWith(r.key + '/'))) { const gone = ok.find((r) => current.path === r.key || current.path.startsWith(r.key + '/')); navHist.length = 0; await navigate(parentOf(gone.key)); return; } // the folder we were in is gone: step out of it
+  await refresh({ force: true });
+}
+
+let allKids = false; // "show all" toggle for the folders-inside list
 function renderFocus() {
   if (!current) return;
-  const el = $('#focus');
-  const n = selected ? selected.userData.node : current;
-  const isCur = !selected;
-  const parentSize = isCur ? null : current.size;
-  const flagged = flaggedUnder(n.path);
-  const cand = gunkSet.get(n.path);
-  el.innerHTML = `<div class="kind"></div><div class="name"></div><div class="meta"></div><div class="flag"></div><div class="share"><i></i></div><div class="sharelbl"></div><div class="acts"></div>`;
-  el.querySelector('.kind').textContent = isCur ? (n.path ? `Folder in ${parentOf(n.path) || rootName}` : 'Scan root') : n.is_dir ? 'Selected folder' : 'Selected file';
-  el.querySelector('.name').textContent = n.name;
-  el.querySelector('.meta').textContent = nodeInfo(n);
-  el.querySelector('.flag').textContent = cand ? `${TIER_LABEL[cand.tier]} · ${cand.what}. ${cand.note}` : flagged ? `${fmt(flagged)} flagged inside` : '';
-  if (cand) el.querySelector('.flag').style.color = TIER_HEX[cand.tier];
-  const share = parentSize ? n.size / parentSize : n.path ? n.size / rootSize : 1;
-  el.querySelector('.share i').style.width = `${Math.max(1, share * 100)}%`;
-  el.querySelector('.sharelbl').textContent = parentSize ? `${(share * 100).toFixed(share < 0.1 ? 1 : 0)}% of ${current.name}` : n.path ? `${(share * 100).toFixed(share < 0.1 ? 1 : 0)}% of ${rootName}` : `${fmtN(n.files)} files scanned`;
-  const acts = el.querySelector('.acts');
-  const mk = (label, cls, fn) => { const b = document.createElement('button'); b.className = `btn sm ${cls}`; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
-  const finder = () => api('/api/open', { path: n.path }).catch((e) => toast(e.message));
+  const el = $('#focus'); el.innerHTML = '';
+  const parts = current.path ? current.path.split('/') : [];
+  // where you are: Up button + clickable trail, then the folder itself
+  const trail = document.createElement('div'); trail.className = 'trail';
+  const up = document.createElement('button'); up.className = 'up'; up.title = 'Up one level (Esc)'; up.setAttribute('aria-label', 'Up one level'); up.textContent = '↑'; up.disabled = !current.path; up.onclick = goUp; trail.appendChild(up);
+  const crumb = (label, path) => { const b = document.createElement('button'); b.className = 'crumb'; b.textContent = label; b.onclick = () => navigate(path); trail.appendChild(b); const s = document.createElement('span'); s.textContent = '›'; trail.appendChild(s); };
+  if (parts.length) { crumb(rootName, ''); parts.slice(0, -1).forEach((p, i) => crumb(p, parts.slice(0, i + 1).join('/'))); } else trail.append('Scan root');
+  el.appendChild(trail);
+  const name = document.createElement('div'); name.className = 'name'; name.textContent = current.name + (current.path ? ' /' : ''); el.appendChild(name);
+  const meta = document.createElement('div'); meta.className = 'meta';
+  const share = current.path ? current.size / rootSize : 1;
+  meta.textContent = `${nodeInfo(current)}${current.path ? ` · ${(share * 100).toFixed(share < 0.1 ? 1 : 0)}% of ${rootName}` : ''}`; el.appendChild(meta);
+  const flagged = flaggedUnder(current.path);
+  if (flagged) { const f = document.createElement('div'); f.className = 'flag'; f.textContent = `${fmt(flagged)} flagged inside`; el.appendChild(f); }
+  const acts = document.createElement('div'); acts.className = 'acts';
+  const mk = (label, cls, fn, n) => { const b = document.createElement('button'); b.className = `btn sm ${cls}`; b.textContent = label; b.onclick = fn; (n ?? acts).appendChild(b); };
+  const finder = (n) => () => api('/api/open', { path: n.path }).catch((e) => toast(e.message));
+  mk('Finder', 'quiet', finder(current)); el.appendChild(acts);
+  // what you clicked on the map
   if (selected) {
-    if (n.is_dir) mk('Explore', '', () => enter(selected));
-    mk('Finder', 'quiet', finder);
-    mk('Deselect', 'quiet', () => setSelected(null));
-  } else {
-    mk('Finder', 'quiet', finder);
-    if (n.path) mk('Up', 'quiet', goUp);
+    const n = selected.userData.node, cand = gunkSet.get(n.path);
+    const sel = document.createElement('div'); sel.className = 'sel';
+    sel.innerHTML = `<div class="k">Selected on the map</div><div class="r"><div><div class="n"></div><div class="m"></div></div><div class="a"></div></div>`;
+    sel.querySelector('.n').textContent = n.name + (n.is_dir ? ' /' : ''); sel.querySelector('.m').textContent = `${nodeInfo(n)} · ${((n.size / current.size) * 100).toFixed(n.size / current.size < 0.1 ? 1 : 0)}% of ${current.name}${cand ? ` · ${TIER_LABEL[cand.tier]}` : ''}`;
+    if (cand) sel.querySelector('.m').style.color = TIER_HEX[cand.tier];
+    const a = sel.querySelector('.a');
+    if (n.is_dir) mk('Open', '', () => enter(selected), a);
+    mk('Finder', 'quiet', finder(n), a); mk('✦ Ru', 'ru', () => ruOpen('selection'), a); mk('×', 'quiet', () => setSelected(null), a);
+    dragSource(sel, n.path);
+    el.appendChild(sel);
   }
-}
-
-function renderInside() {
-  const el = $('#inside'); el.innerHTML = '';
-  const all = current.children.filter((c) => c.path), kids = all.filter((c) => matches(c) && (c.size > 0 || !filter));
-  $('#inside-sum').textContent = filter ? `${kids.length} of ${all.length} items` : `${kids.length} items`;
-  if (!kids.length) { el.innerHTML = `<div class="empty">${filter ? 'Nothing here matches the filter.' : 'Empty folder.'}</div>`; return; }
-  const max = kids[0].size || 1;
-  for (const c of kids) {
-    const flagged = flaggedUnder(c.path), own = gunkSet.get(c.path);
-    const row = document.createElement('div'); row.className = 'row'; row.dataset.key = c.path; row.tabIndex = 0;
-    row.innerHTML = `<div><div class="name"></div><div class="sub"></div></div><div class="sz"></div><div class="bar"><i></i></div>`;
-    row.querySelector('.name').textContent = c.name; row.querySelector('.name').classList.toggle('dir', c.is_dir);
-    const sub = row.querySelector('.sub');
-    sub.textContent = `${c.is_dir ? fmtN(c.files) + ' files · ' : ''}${fmtAge(ageDays(c))}`;
-    if (filter) sub.innerHTML += ` · <b>${fmt(matchedSize(c))} ${filter === 'idle' ? 'idle' : filterLabel()}</b>`;
-    else if (own) sub.innerHTML += ` · <b>flagged</b>`; else if (flagged) sub.innerHTML += ` · <b>${fmt(flagged)} flagged</b>`;
-    row.querySelector('.sz').textContent = fmt(c.size);
-    const bar = row.querySelector('.bar i'); bar.style.width = `${Math.max(1, (c.size / max) * 100)}%`;
-    bar.style.setProperty('--barcol', own ? '#FF7A3D' : '#' + heatColor(Math.min(1, ageDays(c) / 365)).getHexString());
-    row.onmouseenter = () => (rowHover = c.path); row.onmouseleave = () => (rowHover = null);
-    const act = () => { const m = byKey.get(c.path); if (c.is_dir) { if (m) enter(m); else navigate(c.path); } else if (m) setSelected(m); };
-    row.onclick = act; row.onkeydown = (e) => { if (e.key === 'Enter') act(); };
+  // what is inside: folders by size, click to go down
+  const dirs = current.children.filter((c) => c.path && c.is_dir && c.size > 0 && !hiddenPaths.has(c.path)), files = current.children.filter((c) => c.path && !c.is_dir && !hiddenPaths.has(c.path));
+  const hiddenHere = current.children.filter((c) => c.path && hiddenPaths.has(c.path));
+  const head = document.createElement('div'); head.className = 'kh'; head.textContent = dirs.length ? `Folders inside · ${dirs.length}` : 'No folders inside'; el.appendChild(head);
+  const show = allKids ? dirs : dirs.slice(0, 8), max = dirs[0]?.size || 1;
+  for (const c of show) {
+    const row = document.createElement('div'); row.className = 'row kid'; row.tabIndex = 0; row.dataset.key = c.path;
+    row.innerHTML = `<div><div class="name dir"></div><div class="sub"></div></div><div class="sz"></div><span class="go">›</span><div class="bar"><i></i></div>`;
+    row.querySelector('.name').textContent = c.name; row.querySelector('.sub').textContent = `${fmtN(c.files)} files · ${fmtAge(ageDays(c))}${flaggedUnder(c.path) ? ` · ${fmt(flaggedUnder(c.path))} flagged` : ''}`;
+    row.querySelector('.sz').textContent = fmt(c.size); row.querySelector('.bar i').style.width = `${Math.max(1, (c.size / max) * 100)}%`;
+    row.onmouseenter = () => (rowHover = c.path); row.onmouseleave = () => (rowHover = null); dragSource(row, c.path);
+    row.onclick = () => { const m = byKey.get(c.path); m ? enter(m) : navigate(c.path); }; row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
     el.appendChild(row);
   }
+  const foot = document.createElement('div'); foot.className = 'kf';
+  if (dirs.length > 8) { const b = document.createElement('button'); b.textContent = allKids ? 'show fewer' : `show all ${dirs.length}`; b.onclick = () => { allKids = !allKids; renderFocus(); }; foot.appendChild(b); }
+  if (files.length) foot.append(`${foot.children.length ? ' · ' : ''}${fmtN(files.length)} file${files.length === 1 ? '' : 's'} here · ${fmt(files.reduce((s, c) => s + c.size, 0))}`);
+  if (hiddenHere.length) { const b = document.createElement('button'); b.textContent = `${foot.childNodes.length ? ' · ' : ''}${hiddenHere.length} hidden · show`; b.onclick = showHiddenList; foot.appendChild(b); }
+  if (foot.childNodes.length) el.appendChild(foot);
+  ruSync();
 }
 
-function renderGunk() {
-  const v = $('#v-gunk'); v.innerHTML = '';
-  const list = filter === 'idle' ? gunkList.filter((c) => c.age_days >= idleDays) : filter && filter !== 'flagged' ? gunkList.filter((c) => c.tier === filter) : gunkList;
-  const total = list.reduce((s, c) => s + c.size, 0);
-  $('#gunk-sum-here').textContent = list.length ? `${list.length} · ${fmt(total)}` : '';
-  if (!list.length) { v.innerHTML = '<div class="empty">Nothing flagged under this folder.</div>'; return; }
-  const base = current.path ? current.path + '/' : '';
-  for (const c of list) {
-    const rel = c.path.startsWith(base) ? c.path.slice(base.length) : c.path;
-    const row = document.createElement('div'); row.className = 'row'; row.dataset.key = c.path; row.tabIndex = 0;
-    row.innerHTML = `<div><div class="name"></div><div class="sub"></div></div><div><div class="sz"></div><div class="why"></div></div>`;
-    row.querySelector('.name').textContent = c.name;
-    row.querySelector('.sub').textContent = parentOf(rel) || (c.path === current.path ? 'this folder' : 'here');
-    row.querySelector('.sz').textContent = fmt(c.size);
-    row.querySelector('.why').textContent = c.what; row.querySelector('.why').style.color = TIER_HEX[c.tier];
-    row.onmouseenter = () => (rowHover = base + rel.split('/')[0]); row.onmouseleave = () => (rowHover = null); // light up the block at this level that contains it
-    row.onclick = () => navigate(parentOf(c.path), { highlight: c.path });
-    row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
-    v.appendChild(row);
+// ---------- remembered per scan root: hidden folders, tiers, colour, filter, ticks, Ru's chat. Lives in ~/.dime/state.json ----------
+let stateTimer = null, stateLoaded = false;
+function saveState() {
+  if (!stateLoaded) return;
+  clearTimeout(stateTimer);
+  stateTimer = setTimeout(() => api('/api/state', { root: rootPath || '/', state: {
+    hidden: [...hiddenPaths.values()].map((n) => ({ path: n.path, name: n.name, size: n.size })), tiers: [...tiersOn], color: colorMode, filter, idleDays,
+    picked: [...picked.values()].map((c) => ({ path: c.path, name: c.name, size: c.size, is_dir: c.is_dir, tier: c.tier, reason: c.reason, what: c.what, note: c.note, age_days: c.age_days })),
+    ru: ru.turns.slice(-20),
+  } }).catch(() => {}), 400);
+}
+async function loadState() {
+  stateLoaded = false;
+  let st = null; try { st = await api(`/api/state?root=${encodeURIComponent(rootPath || '/')}`); } catch {}
+  hiddenPaths.clear(); picked.clear(); ru.turns.length = 0; ruMsgs.innerHTML = ''; ruEl.querySelector('.clear').hidden = true;
+  if (st) {
+    for (const h of st.hidden ?? []) hiddenPaths.set(h.path, h);
+    if (st.tiers?.length) { tiersOn.clear(); for (const t of st.tiers) tiersOn.add(t); }
+    if (st.color) { colorMode = st.color; syncColorMode(); }
+    if (st.filter !== undefined && !params.get('f')) { filter = st.filter; idleDays = st.idleDays ?? 0; if (filter === 'idle' && !idleDays) filter = ''; syncFilterButtons(); }
+    for (const c of st.picked ?? []) picked.set(c.path, c);
+    for (const t of st.ru ?? []) { ru.turns.push(t); ruAdd(t.who, t.text); }
+    if (ru.turns.length) ruEl.querySelector('.clear').hidden = false;
   }
+  stateLoaded = true;
 }
 // ---------- live updates: the server watches the scan root and bumps `version` on every change ----------
 let version = null;
-async function refresh() {
-  views.clear();
+let lastRefresh = 0;
+async function refresh({ force = false } = {}) {
+  if (!force && (navBusy || performance.now() - lastInput < 3000)) return; // never yank the map out from under a click; the next tick retries
+  lastRefresh = performance.now(); views.clear(); kidCache.clear();
   const keep = selected?.userData.entry.key, path = current.path;
-  await Promise.all([loadDrive(), navigate(path)]);
+  await Promise.all([loadDrive(), navigate(path, { quiet: true })]);
   if (keep && byKey.has(keep)) setSelected(byKey.get(keep));
 }
 setInterval(async () => {
@@ -1057,7 +1151,7 @@ setInterval(async () => {
   try {
     const s = await api('/api/status');
     if (s.state !== 'done') return;
-    if (version !== null && s.version !== version) await refresh();
+    if (version !== null && s.version !== version) { if (performance.now() - lastRefresh < 15000) return; await refresh(); if (navBusy || performance.now() - lastInput < 3000) return; } // a busy disk bumps the version every second; the map is redrawn at most every 15 s // leave `version` stale so we retry once things are quiet
     version = s.version;
   } catch {}
 }, 2000);
@@ -1066,7 +1160,7 @@ setInterval(async () => {
 function showLanding() {
   if (mode === 'mem') leaveHog();
   hog.returnTo = null;
-  hideMenu(); setSelected(null);
+  hideMenu(); setSelected(null); navHist.length = 0;
   setBlocks([]); current = null; $('#disk').hidden = true;
   $('#app').hidden = true;
   const l = $('#landing'); l.hidden = false;
@@ -1078,6 +1172,7 @@ function showLanding() {
   $('#disk-setup').hidden = true;
   $('.mode .alt').hidden = !scanDone;
   $('.mode.du b').textContent = scanDone ? `Back to ${rootName}` : 'Dig through the drive';
+  if (!scanDone) api('/api/status').then((s) => renderSnaps(s.snapshots)).catch(() => {});
 }
 const ringSvg = (frac, i) => {
   const r = 20, c = 2 * Math.PI * r, hot = frac > 0.85;
@@ -1134,18 +1229,20 @@ $('#hidden-toggle').onclick = () => { showHidden = !showHidden; renderDirs(); };
 $('#path').addEventListener('change', () => browse($('#path').value));
 loadDrives();
 let homePath = '';
-api('/api/home').then((h) => { homePath = h.path.replace(/\/$/, ''); browse('/'); }); // Du starts at the root of the drive
+api('/api/home').then((h) => { homePath = h.path.replace(/\/$/, ''); browse('/'); }); // Di starts at the root of the drive
 const tilde = (p) => homePath && (p === homePath || p.startsWith(homePath + '/')) ? '~' + p.slice(homePath.length) : p;
 function beginScanUi(root) {
   if (mode === 'mem') leaveHog();
   rootName = root.split('/').filter(Boolean).pop() || '/'; rootPath = root.replace(/\/$/, '');
-  scanning = true; started = true; flyHome = false; camGoal = null;
+  scanning = true; document.body.dataset.scanning = ''; started = true; clearTimeout(stateTimer); stateLoaded = false; hiddenPaths.clear(); picked.clear(); openRows.clear(); kidCache.clear(); navHist.length = 0; rotHold = false; flyHome = false; camGoal = null;
+  for (const m of [...byKey.values()]) dispose(m); // a rescan starts from a bare stage; the stacks rise fresh rather than the old map morphing in place
+  setSelected(null); hideMenu(); $('#reveal').classList.remove('on');
   camera.position.set(-60, 95, 170); controls.target.set(14, 6, 0);
   controls.autoRotate = !REDUCED; controls.autoRotateSpeed = 1.1; // slow lap around the map while the search party works
   $('#landing').classList.add('away'); setTimeout(() => ($('#landing').hidden = true), 600);
   $('#app').hidden = false; $('#panel').classList.add('away');
   current = { path: '' }; renderCrumbs();
-  $('#hint').textContent = 'Du: search party out. My choppers hover over every folder still being counted and drop in what they find.';
+  $('#hint').textContent = 'Di: search party out. My choppers hover over every folder still being counted and drop in what they find. Space holds the camera.';
 }
 async function watchScan() {
   for (;;) {
@@ -1153,18 +1250,18 @@ async function watchScan() {
     if (s.state === 'done') return s;
     if (s.state !== 'scanning') throw new Error('scan stopped');
     $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmt(s.size)}`;
-    if (mode === 'disk') { setBlocks(entriesFor(s.live.filter((i) => i.size > 0), { live: true })); crewAssign(s.live); }
+    if (mode === 'disk') { setBlocks(entriesFor(s.live, { live: true })); crewAssign(s.live); }
     await sleep(120);
   }
 }
 async function finishScan() {
-  scanning = false; scanDone = true; version = null; views.clear();
+  scanning = false; delete document.body.dataset.scanning; scanDone = true; version = null; views.clear(); mapAsOf = null;
+  await loadState();
   if (mode !== 'disk') { rootSize = (await api('/api/status')).size || 1; await loadDrive(); return; } // finished while Me was up; the map waits until you come back $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
   const st = await api('/api/status');
   rootSize = st.size || 1;
   await loadDrive();
-  setBlocks([]); // clear the live map so the final one rises as a wave
-  await navigate('', { stagger: true, ...(pendingHighlight ? { highlight: pendingHighlight } : {}) });
+  await navigate('', pendingHighlight ? { highlight: pendingHighlight } : {}); // same keys as the stacks: they slide into their treemap places
   pendingHighlight = null;
   reveal(st);
   $('#panel').classList.remove('away');
@@ -1178,7 +1275,7 @@ function reveal(st) {
   const tick = (now) => {
     const k = dur ? Math.min(1, (now - t0) / dur) : 1, e = 1 - Math.pow(1 - k, 3);
     el.querySelector('.big').innerHTML = `${fmt(st.size * e)} <span>·</span> ${fmtN(Math.round(st.files * e))} files`;
-    el.querySelector('.sub').innerHTML = easy ? `Du found <b>${fmt(easy * e)}</b> safe to free` : `Du mapped ${rootName}`;
+    el.querySelector('.sub').innerHTML = easy ? `Di found <b>${fmt(easy * e)}</b> safe to free` : `Di mapped ${rootName}`;
     if (k < 1) requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
@@ -1196,28 +1293,53 @@ async function startScan(path) {
     await watchScan();
     await finishScan();
   } catch (err) {
-    $('#err').textContent = err.message; $('#landing').hidden = false; $('#landing').classList.remove('away'); scanning = false;
+    $('#err').textContent = err.message; $('#landing').hidden = false; $('#landing').classList.remove('away'); scanning = false; delete document.body.dataset.scanning;
   } finally { $('#scanbtn').disabled = false; }
 }
 $('#scanform').onsubmit = (e) => { e.preventDefault(); startScan($('#path').value); };
 // page reload: pick up a scan already running or finished on the server
-api('/api/status').then(async (s) => {
-  if (s.state === 'idle' || location.hash === '#memory') { if (s.state === 'done') { scanDone = true; rootPath = s.root.replace(/\/$/, ''); rootName = rootPath.split('/').filter(Boolean).pop() || '/'; } return; }
+let mapAsOf = null; // epoch seconds when the map came from a snapshot, null after a fresh scan
+const ago = (t) => { const s = Date.now() / 1000 - t; return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
+/** The page picked up a map the server already holds: a scan in progress, a finished one, or one just resumed from a snapshot. */
+async function enterMap(s) {
   beginScanUi(s.root);
   if (s.state === 'scanning') await watchScan();
-  scanning = false; scanDone = true; flyHome = false; $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
-  rootSize = (await api('/api/status')).size || 1;
-  await loadDrive();
+  scanning = false; delete document.body.dataset.scanning; scanDone = true; flyHome = false; $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
+  const st = await api('/api/status'); rootSize = st.size || 1; mapAsOf = st.as_of ?? null;
+  await loadDrive(); await loadState();
   const sel = new URLSearchParams(location.search).get('sel'); // deep link: ?sel=<rel path> highlights an item
   await navigate(location.hash.slice(1) || '', sel ? { highlight: sel } : {});
   $('#panel').classList.remove('away');
+}
+async function resumeMap(root) {
+  hideMenu(); $('#err').textContent = '';
+  try { await api('/api/resume', { path: root }); await enterMap(await api('/api/status')); } catch (e) { $('#err').textContent = e.message; }
+}
+function renderSnaps(list) {
+  const el = $('#snaps'); el.innerHTML = ''; $('#last').hidden = !list?.length;
+  for (const m of list ?? []) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'snap';
+    b.innerHTML = `<div><div class="n"></div><div class="m"></div></div><span class="go">Open</span>`;
+    b.querySelector('.n').textContent = tilde(m.root); b.querySelector('.m').textContent = `${fmt(m.size)} · ${fmtN(m.files)} files · mapped ${ago(m.at)}`;
+    b.title = 'Open the last map at once; Rescan later for a fresh one'; b.onclick = () => resumeMap(m.root);
+    el.appendChild(b);
+  }
+}
+api('/api/status').then(async (s) => {
+  renderSnaps(s.state === 'idle' ? s.snapshots : []);
+  applyRu(s.ru);
+  if (s.state === 'idle' || location.hash === '#memory') {
+    if (s.state === 'done') { scanDone = true; rootPath = s.root.replace(/\/$/, ''); rootName = rootPath.split('/').filter(Boolean).pop() || '/'; rootSize = s.size || 1; mapAsOf = s.as_of ?? null; await loadDrive(); await loadState(); }
+    return;
+  }
+  await enterMap(s);
 });
 
 // ---------- loop ----------
 let last = performance.now(), spinUntil = 0;
 renderer.setAnimationLoop((now) => {
-  // the camera only turns on its own while Du is scanning, or for the short reveal spin afterwards
-  if (mode === 'disk' && started) controls.autoRotate = !REDUCED && (scanning || now < spinUntil);
+  // the camera only turns on its own while Di is scanning, or for the short reveal spin afterwards
+  if (mode === 'disk' && started) controls.autoRotate = !REDUCED && ((scanning && !rotHold) || now < spinUntil);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (flyHome) { camera.position.lerp(HOME_CAM, REDUCED ? 1 : 1 - Math.exp(-dt * 3)); if (camera.position.distanceTo(HOME_CAM) < 0.5) flyHome = false; }
   updateCamera(dt, now);
@@ -1226,7 +1348,7 @@ renderer.setAnimationLoop((now) => {
   updateCrew(dt, now); updateEscort(dt, now); updateHomeFlyers(dt, now);
   if (mode === 'mem' && memView !== 'orbit') return; // list view is plain HTML; give the GPU a rest
   updateWorld(dt, now);
-  updateBlocks(dt, now); updateVoxels(dt, now); updateSparks(dt); updateDust(dt, now);
+  updateBlocks(dt, now); updateRipples(dt, now); updateSparks(dt); updateDust(dt, now);
   if (mode === 'mem') { updateOrbit(dt, now); updateShip(dt, now); updateOrbitHover(); } else if (current) updateHover();
   composer.render();
   labelR.render(scene, camera);
@@ -1503,14 +1625,12 @@ async function openInGunk(abs, isDir) {
   leaveHog();
   if (inside) {
     const rel = abs.slice(rootPath.length + 1);
-    $('#app').hidden = false; $('#panel').classList.remove('away');
-    for (const t of $('#tabs').children) t.setAttribute('aria-selected', String(t.dataset.v === 'explore'));
-    $('#v-clean').hidden = true; $('#v-explore').hidden = false;
+    $('#app').hidden = false; $('#panel').classList.remove('away'); showTab('browse');
     await navigate(isDir ? rel : parentOf(rel), isDir ? {} : { highlight: rel });
-    toast(`Du: here it is · ${isDir ? rel || rootName : rel}`, 'du');
+    toast(`Di: here it is · ${isDir ? rel || rootName : rel}`, 'du');
   } else {
     pendingHighlight = name || null;
-    toast(`Me: handing you to Du, who is scanning ${tilde(dir)}`, 'me');
+    toast(`Me: handing you to Di, who is scanning ${tilde(dir)}`, 'me');
     await startScan(dir);
   }
 }
@@ -1537,7 +1657,7 @@ async function backToMap() {
 // The chosen resource is a well at the centre. Each process is an orb: size = memory, colour = its load on that
 // resource, distance from the core = that load (busy spirals in, idle drifts to the rim), angular speed = load.
 // Trails show who just moved. Faint lines tie helpers to their app. Pulsing rings mark odd behaviour.
-let memView = new URLSearchParams(location.search).get('view') || (() => { try { return localStorage.getItem('dume.memview') || 'orbit'; } catch { return 'orbit'; } })();
+let memView = new URLSearchParams(location.search).get('view') || (() => { try { return localStorage.getItem('dime.memview') || 'orbit'; } catch { return 'orbit'; } })();
 if (memView !== 'list') memView = 'orbit';
 const orbit = { on: false, by: 'cpu', orbs: new Map(), group: new THREE.Group(), lines: null, core: null, coreLbl: null, rings: [], hover: null, lastTrail: 0 };
 scene.add(orbit.group);
@@ -1800,7 +1920,7 @@ $('#pause').onclick = () => document.dispatchEvent(new KeyboardEvent('keydown', 
 $('#arrange').onclick = (e) => { const b = e.target.closest('button[data-a]'); if (!b) return; orbit.by = b.dataset.a; for (const x of $('#arrange').querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b)); orbitSync(); $('#hint').textContent = `Me: arranged by ${ARRANGE[orbit.by][0].toLowerCase()}. The closer to the core, the more it is using right now.`; };
 
 function setMemView(v) {
-  memView = v; try { localStorage.setItem('dume.memview', v); } catch {}
+  memView = v; try { localStorage.setItem('dime.memview', v); } catch {}
   document.body.dataset.view = v;
   if (v === 'orbit') {
     orbitBuildStatic(); orbit.on = true; orbit.group.visible = true;
@@ -1815,3 +1935,353 @@ function setMemView(v) {
 }
 
 if (location.hash === '#memory') enterHog();
+
+
+// ---------- export: the cleanup view as a Markdown report you can hand to anything that reads text ----------
+function exportReport() {
+  if (!current || !summaryData) return;
+  const abs = (p) => rootPath + (p ? '/' + p : '');
+  const L = [`# DiMe cleanup report`, ``, `- Scan root: ${rootPath || '/'}`, `- Folder: ${abs(current.path)} · ${nodeInfo(current)}`, filter === 'idle' ? `- Filter: only items untouched for ${idleDays}+ days` : '', `- Generated: ${new Date().toLocaleString()}`,
+    `- How to read this: Di flags candidates in three tiers. "Safe to remove" is regenerated automatically; "Probably safe" is usually fine after a glance; "Worth a look" is big or old and your call. Sizes are on-disk. Move to vault puts an item into ~/.dime/vault (reversible); delete is permanent.`, ``];
+  const totals = filter === 'idle' ? new Map() : new Map(summaryData.kinds.map(([id, , , size, n]) => [id, [size, n]]));
+  const list = cleanList(), kinds = [...new Set(list.map((c) => c.reason))].map((id) => { const items = list.filter((c) => c.reason === id && !hiddenUnder(c.path)), [size, n] = totals.get(id) ?? [sumOf(items), items.length]; return { id, tier: items[0]?.tier, what: items[0]?.what, size: Math.max(size, sumOf(items)), n: Math.max(n, items.length), items }; }).filter((k) => k.items.length).sort((x, y) => TIER_ORDER[x.tier] - TIER_ORDER[y.tier] || y.size - x.size);
+  const tierTotal = (t) => kinds.filter((k) => k.tier === t).reduce((a, k) => [a[0] + k.size, a[1] + k.n], [0, 0]);
+  L.push(`## Totals`, ``, ...['safe', 'likely', 'review'].map((t) => { const [sz, n] = tierTotal(t); return `- ${TIER_LABEL[t]}: ${fmt(sz)} · ${n} item${n === 1 ? '' : 's'}`; }), ``);
+  let last = null;
+  for (const k of kinds) {
+    if (k.tier !== last) { L.push(`## ${TIER_LABEL[k.tier]}`, ``); last = k.tier; }
+    L.push(`### ${k.what} · ${fmt(k.size)} · ${k.n} item${k.n === 1 ? '' : 's'}`, ``, `${KIND_HINT[k.id] ?? ''}`, ``);
+    for (const c of k.items) L.push(`- ${abs(c.path)}${c.is_dir ? '/' : ''} · ${fmt(c.size)} · ${fmtAge(c.age_days)} · ${c.note}`);
+    if (k.items.length < k.n) L.push(`- … and ${k.n - k.items.length} more, smaller`);
+    L.push(``);
+  }
+  if (picked.size) L.push(`## Ticked by the user`, ``, ...[...picked.values()].map((c) => `- ${abs(c.path)} · ${fmt(c.size)} · ${TIER_LABEL[c.tier]} · ${c.what}`), ``);
+  if (hiddenPaths.size) L.push(`## Hidden from the map by the user`, ``, ...[...hiddenPaths.values()].map((n) => `- ${abs(n.path)} · ${fmt(n.size)}`), ``);
+  if (vaultList.length) L.push(`## In the vault`, ``, ...vaultList.map((e) => `- ${e.name}${e.is_dir ? '/' : ''} · ${fmt(e.size)} · from ${e.from} · archived ${new Date(e.archived_at * 1000).toLocaleDateString()}${e.note ? ` · ${e.note}` : ''}`), ``);
+  const blob = new Blob([L.join('\n')], { type: 'text/markdown' }), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `dime-cleanup-${(current.path ? current.name : rootName).replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.md`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Di: report saved · ${a.download}`, 'du');
+}
+
+// ---------- Ru: the wise one. Three areas it can look at: your Selection, the Folder in view, the Vault ----------
+const ru = { open: false, busy: false, turns: [], area: 'folder', pinned: false, abort: null, sel: new Map(), label: null }; // sel: rel path -> item; label: the AI behind Ru, null when none
+const ruEl = $('#ru'), ruMsgs = ruEl.querySelector('.msgs'), ruIn = ruEl.querySelector('textarea'), ruSend = ruEl.querySelector('.ask .btn');
+const absOf = (p) => rootPath + (p ? '/' + p : '');
+const relOf = (abs) => abs === rootPath ? '' : abs.startsWith(rootPath + '/') ? abs.slice(rootPath.length + 1) : null;
+const candLine = (c) => `- ${absOf(c.path)} · ${fmt(c.size)} · ${TIER_LABEL[c.tier]} · ${c.what}. ${c.note}`;
+const kidLine = (c) => `- ${c.name}${c.is_dir ? '/' : ''} · ${fmt(c.size)} · ${fmtAge(ageDays(c))}${c.types?.some(Boolean) ? ` · mostly ${TYPE_NAMES[dominant(c.types)]}` : ''}`;
+// ---- the Selection: items you clicked, ticked, dragged in, or sent from a menu. Each is hydrated with what Di knows about that path.
+function ruSelAdd(path, { source = 'drop', node = null, cand = null } = {}) {
+  let it = ru.sel.get(path);
+  if (!it) {
+    const n = node ?? current?.children.find((c) => c.path === path) ?? null;
+    it = { path, name: (n?.name ?? cand?.name ?? path.split('/').pop()) || rootName, is_dir: n?.is_dir ?? cand?.is_dir ?? true, size: n?.size ?? cand?.size ?? 0, node: n, cand: cand ?? gunkSet.get(path) ?? null, kids: [], flagged: [], source, ready: false };
+    ru.sel.set(path, it);
+    ruHydrate(it);
+  } else if (source !== 'map') it.source = source; // a click can promote nothing; a tick or drop makes it stick
+  ruSync(); return it;
+}
+function ruSelRemove(path) { const it = ru.sel.get(path); if (!it) return; ru.sel.delete(path); if (it.source === 'tick' && picked.has(path)) { picked.delete(path); if (current) renderCleanup(); } if (it.source === 'map' && selected?.userData.node.path === path) { setSelected(null); return; } ruSync(); }
+async function ruHydrate(it) {
+  try {
+    const q = encodeURIComponent(it.path);
+    const idle = filter === 'idle' ? `&idle=${idleDays}` : '';
+    const [t, g] = await Promise.all([api(`/api/tree?path=${q}&depth=1${idle}`), api(`/api/gunk?path=${q}${idle}`)]);
+    it.name = t.name || it.name; it.is_dir = t.is_dir; it.size = t.size; it.node = t;
+    it.kids = (t.children ?? []).filter((c) => c.path).sort((x, y) => y.size - x.size);
+    it.flagged = g; it.cand = g.find((c) => c.path === it.path) ?? it.cand;
+  } catch {}
+  it.ready = true; ruSync();
+}
+// keep the Selection honest with the map and the Cleanup ticks; dropped and sent items stay until you remove them
+function ruReconcile() {
+  const mapPath = mode === 'disk' && selected ? selected.userData.node.path : null;
+  for (const [p, it] of ru.sel) { if (it.source === 'map' && p !== mapPath) ru.sel.delete(p); if (it.source === 'tick' && !picked.has(p)) ru.sel.delete(p); }
+  if (mapPath !== null && !ru.sel.has(mapPath)) { const n = selected.userData.node; ru.sel.set(mapPath, { path: mapPath, name: n.name, is_dir: n.is_dir, size: n.size, node: n, cand: gunkSet.get(mapPath) ?? null, kids: (n.children ?? []).filter((c) => c.path), flagged: gunkList.filter((c) => c.path === mapPath || c.path.startsWith(mapPath + '/')), source: 'map', ready: true }); }
+  for (const [p, c] of picked) if (!ru.sel.has(p)) ru.sel.set(p, { path: p, name: c.name, is_dir: c.is_dir, size: c.size, node: null, cand: c, kids: [], flagged: [c], source: 'tick', ready: true });
+}
+const ruAreas = () => [
+  { id: 'selection', label: mode === 'mem' && hog.sel ? 'Process' : ru.sel.size ? `Selection ${ru.sel.size}` : 'Selection', on: mode === 'mem' ? !!hog.sel : ru.sel.size > 0, hint: 'what you clicked, ticked, or dragged in' },
+  { id: 'folder', label: 'Folder', on: mode === 'disk' && !!current, hint: 'the folder in view' },
+  { id: 'vault', label: vaultList.length ? `Vault ${vaultList.length}` : 'Vault', on: vaultList.length > 0, hint: 'archived items' },
+];
+function ruContext() {
+  const L = [];
+  if (filter === 'idle') L.push(`IDLE VIEW: the user is looking only at files untouched for ${idleDays}+ days. Sizes in the panel are the idle bytes inside each item, not the whole item; "move" or "delete" would act only on those files and leave the rest of the folder in place. Di's index (the di command) reports whole items.`);
+  if (ru.area === 'selection') {
+    if (mode === 'mem') {
+      const p = procById(hog.sel);
+      if (p) L.push(`SUBJECT, a process the user is looking at in Me: ${p.name} · pid ${p.pid}${p.parent ? ` · parent pid ${p.parent}` : ''} · user ${p.user} · ${p.exe}\n${fmt(p.rss)} memory · ${p.cpu.toFixed(0)}% CPU · ${fmtRate(p.read_rate + p.write_rate)} disk · ${fmtRate(p.net_in + p.net_out)} network · running ${Math.round(p.run_time / 60)} min`);
+      const files = hog.filesPid === hog.sel ? hog.files ?? [] : [];
+      if (files.length) L.push(`Files it has open (${files.length}, biggest first):\n` + files.slice(0, 25).map((f) => `- ${f.path} · ${fmt(f.size)}${f.written_ago != null ? ` · written ${fmtAge(Math.round(f.written_ago / 86400))}` : ''}`).join('\n'));
+    } else {
+      const items = [...ru.sel.values()].slice(0, 12);
+      L.push(`SUBJECT, ${items.length === 1 ? 'the item' : `${items.length} items`} the user selected${ru.sel.size > items.length ? ` (${ru.sel.size - items.length} more not shown)` : ''}:`);
+      for (const it of items) {
+        const idleNote = it.cand?.full_size != null ? ` · of which ${fmt(it.cand.size)} untouched ${idleDays}+ days` : '';
+        const head = `${absOf(it.path)}${it.is_dir ? '/' : ''} · ${fmt(it.cand?.full_size ?? it.size)}${idleNote}${it.node ? ` · ${it.is_dir ? fmtN(it.node.files) + ' files · ' : ''}${fmtAge(ageDays(it.node))}` : ''}${it.node?.types?.some(Boolean) ? ` · mostly ${TYPE_NAMES[dominant(it.node.types)]}` : ''}${it.cand ? `\n  Di flagged it: ${TIER_LABEL[it.cand.tier]} · ${it.cand.what}. ${it.cand.note}` : ''}`;
+        const kids = it.kids.slice(0, 12).map((c) => '  ' + kidLine(c)).join('\n');
+        const fl = it.flagged.filter((c) => c.path !== it.path).slice(0, 12).map((c) => '  ' + candLine(c)).join('\n');
+        L.push(`### ${head}${kids ? `\n  Inside, biggest first:\n${kids}` : ''}${fl ? `\n  Di flagged inside it (${it.flagged.length} in all):\n${fl}` : ''}`);
+      }
+    }
+  } else if (ru.area === 'vault') {
+    L.push('SUBJECT, the vault (~/.dime/vault). The user archived these; each can be restored to its original path or purged for good:\n' + vaultList.map((e) => `- ${e.name}${e.is_dir ? '/' : ''} · ${fmt(e.size)} · from ${e.from} · archived ${new Date(e.archived_at * 1000).toLocaleDateString()}${e.note ? ` · ${e.note}` : ''}`).join('\n'));
+  } else if (current) {
+    L.push(`SUBJECT, the folder in view: ${absOf(current.path)}\n${nodeInfo(current)}`);
+    const kids = current.children.filter((c) => c.path && !hiddenPaths.has(c.path)).slice(0, 30);
+    if (kids.length) L.push('Inside it, biggest first:\n' + kids.map(kidLine).join('\n'));
+    const all = cleanList(), fl = all.filter((c) => !hiddenUnder(c.path)).slice(0, 25);
+    if (fl.length) L.push(`Di flagged under it${filter === 'idle' ? `, untouched ${idleDays}+ days` : ''} (${all.length} in all, biggest ${fl.length}):\n` + fl.map(candLine).join('\n'));
+  }
+  const also = [];
+  if (ru.area !== 'folder' && mode === 'disk' && current) also.push(`folder in view ${absOf(current.path)}`);
+  if (ru.area !== 'vault' && vaultList.length) also.push(`${vaultList.length} item${vaultList.length === 1 ? '' : 's'} in the vault`);
+  if (ru.area !== 'selection' && ru.sel.size) also.push(`${ru.sel.size} item${ru.sel.size === 1 ? '' : 's'} in the user's selection`);
+  L.push(`Scan root: ${rootPath || '/'}${also.length ? `. Also on screen, not the subject: ${also.join('; ')}.` : ''}`);
+  return L.join('\n\n');
+}
+// the focus card: one sentence naming what Ru is about, a tally of what goes with it, and the full text on demand
+function ruPeek() {
+  const f = ruEl.querySelector('.focus'), fs = f.querySelector('.fs'), bits = [];
+  let head = '';
+  if (ru.area === 'selection') {
+    if (mode === 'mem') { const p = procById(hog.sel); head = `<b>${esc(p?.name ?? 'process')}</b> <small>· process in Me</small>`; bits.push(`${Math.min(25, (hog.filesPid === hog.sel ? hog.files ?? [] : []).length)} open files`); }
+    else {
+      const its = [...ru.sel.values()];
+      const one = its.length === 1 ? its[0] : null;
+      head = one ? `<b>${esc(one.name)}${one.is_dir ? '/' : ''}</b> <small>· ${fmt(one.size)} · ${{ map: 'selected on the map', tick: 'ticked in Cleanup', drop: 'dragged in', menu: 'sent from a menu' }[one.source]}</small>` : `<b>${its.length} items</b> <small>· ${fmt(its.reduce((a, it) => a + it.size, 0))} · your selection</small>`;
+      bits.push(`${its.reduce((a, it) => a + Math.min(12, it.kids.length), 0)} inside`, `${its.reduce((a, it) => a + Math.min(12, it.flagged.length), 0)} flagged by Di`, its.some((it) => !it.ready) ? 'still loading' : '');
+    }
+  } else if (ru.area === 'vault') { head = `<b>the Vault</b> <small>· ${vaultList.length} archived item${vaultList.length === 1 ? '' : 's'} · ${fmt(sumOf(vaultList))}</small>`; bits.push('every item, with where it came from'); }
+  else if (current) { const kids = current.children.filter((c) => c.path && !hiddenPaths.has(c.path)).length, fl = gunkList.filter((c) => !hiddenUnder(c.path)).length; head = `<b>${esc(current.path ? current.name : rootName)}/</b> <small>· ${fmt(current.size)} · the folder in view</small>`; bits.push(`${Math.min(30, kids)} of ${kids} inside`, `${Math.min(25, fl)} of ${fl} flagged by Di`); }
+  else head = '<b>nothing yet</b> <small>· map a disk first</small>';
+  if (ru.turns.length) bits.push(`last ${Math.min(8, ru.turns.length)} turns`);
+  fs.innerHTML = head;
+  f.querySelector('.sum').textContent = bits.filter(Boolean).join(' · ');
+  f.querySelector('pre').textContent = ruContext();
+}
+const esc = (x) => String(x).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+{ const f = ruEl.querySelector('.focus'), pre = f.querySelector('pre'), more = f.querySelector('.more'); more.onclick = () => { pre.hidden = !pre.hidden; more.textContent = pre.hidden ? 'show what Ru sees' : 'hide'; }; }
+// switcher pills: Selection, the folder, the Vault; the lit one is what Ru is about. Chips for the Selection underneath.
+function ruCtxLine() {
+  ruReconcile();
+  const A = ruAreas(), on = A.filter((x) => x.on);
+  if (!ru.pinned && !ru.turns.length) ru.area = on[0]?.id ?? 'folder'; // before the first question, follow what you touch: a selection beats the folder
+  else if (!A.find((x) => x.id === ru.area)?.on) ru.area = on[0]?.id ?? 'folder';
+  const el = ruEl.querySelector('.subs'); el.innerHTML = '';
+  for (const x of A) { const b = document.createElement('button'); b.type = 'button'; b.textContent = x.label; b.disabled = !x.on; b.title = x.id === ru.area ? `Ru is looking at this (${x.hint})` : x.on ? `Switch Ru to this (${x.hint})` : `Nothing here yet (${x.hint})`; b.setAttribute('aria-pressed', String(x.id === ru.area)); b.onclick = () => { ru.area = x.id; ru.pinned = true; ruCtxLine(); ruSuggest(); }; el.appendChild(b); }
+  const chips = ruEl.querySelector('.selrow'); chips.innerHTML = '';
+  chips.hidden = !(mode === 'disk' && ru.area === 'selection' && ru.sel.size > 1);
+  for (const it of ru.sel.values()) { const c = document.createElement('span'); c.className = `chip ${it.source}`; c.innerHTML = `<b></b><small></small><button type="button" aria-label="Remove">×</button>`; c.querySelector('b').textContent = it.name + (it.is_dir ? '/' : ''); c.querySelector('small').textContent = it.ready ? fmt(it.size) : '…'; c.title = `${absOf(it.path)} · ${{ map: 'selected on the map', tick: 'ticked in Cleanup', drop: 'dragged in', menu: 'sent from a menu' }[it.source]}`; c.querySelector('button').onclick = () => ruSelRemove(it.path); chips.appendChild(c); }
+  ruPeek();
+}
+const ruSync = () => { if (ru.open) { ruCtxLine(); ruSuggest(); } };
+function ruSuggest() {
+  const el = ruEl.querySelector('.sugg'); el.innerHTML = '';
+  if (ru.turns.length) return;
+  const qs = { selection: mode === 'mem' ? ['Why is this process using so much?', 'Is it safe to quit?'] : ru.sel.size > 1 ? ['Validate these: which can really go?', 'Anything here still in use or referenced?'] : ['Validate this: can it really go?', 'What breaks if I delete it?'],
+    folder: [current?.path ? `Validate what Di flagged in ${current.name}` : 'Validate what Di flagged: what can really go first?', 'What here looks like it needs a closer look?'],
+    vault: ['Anything in the vault I can purge for good?', 'Should any of these go back?'] }[ru.area] ?? [];
+  for (const q of qs) { const b = document.createElement('button'); b.type = 'button'; b.textContent = q; b.onclick = () => ruAsk(q); el.appendChild(b); }
+}
+async function ruOpen(area) {
+  ru.open = true; ruEl.hidden = false; document.body.classList.add('ru-open'); hideMenu(); tip.hidden = true;
+  try { vaultList = await api('/api/vault'); } catch {}
+  if (area) { ru.area = area; ru.pinned = true; }
+  ruCtxLine(); ruSuggest(); ruIn.focus();
+}
+// drag the top-left corner to resize; remembered
+{ const rz = ruEl.querySelector('.rz');
+  try { const { w, h } = JSON.parse(localStorage.getItem('dime.ru') || '{}'); if (w) ruEl.style.width = `${w}px`; if (h) ruEl.style.height = `${h}px`; } catch {}
+  rz.onpointerdown = (e) => {
+    e.preventDefault(); rz.setPointerCapture(e.pointerId); const r = ruEl.getBoundingClientRect(); let w = r.width, h = r.height;
+    rz.onpointermove = (ev) => { w = Math.round(Math.min(Math.max(320, r.right - ev.clientX), innerWidth - 40)); h = Math.round(Math.min(Math.max(260, r.bottom - ev.clientY), innerHeight - 40)); ruEl.style.width = `${w}px`; ruEl.style.height = `${h}px`; };
+    rz.onpointerup = () => { rz.onpointermove = rz.onpointerup = null; try { localStorage.setItem('dime.ru', JSON.stringify({ w, h })); } catch {} };
+  }; }
+function ruClose() { ru.open = false; ruEl.hidden = true; document.body.classList.remove('ru-open'); }
+const NO_RU = 'Ru has no AI to think with. Install the Claude Code CLI or Codex and log in once, run Ollama, or pick an endpoint in the gear menu.';
+function applyRu(label) {
+  ru.label = label; document.body.classList.toggle('no-ru', !label);
+  $('#ru-fab').title = label ? `Ask Ru, the wise one · via ${label}` : NO_RU;
+  $('#ru-home').title = label ? `gu.Ru · ask before you delete · via ${label}` : NO_RU;
+  $('#ru-home').querySelector('.say').textContent = label ? 'Ask before you let go. Ru weighs whatever you point at, looks closer if it must, and answers: delete, archive, or keep.' : 'Ru is greyed out: no AI found. Open the gear menu to pick one.';
+  ruEl.querySelector('.ctx .lbl').textContent = label ? `via ${label}` : 'no AI';
+}
+$('#ru-fab').onclick = () => (ru.label ? ruOpen() : openSettings()); ruEl.querySelector('.x').onclick = ruClose;
+$('#ru-home').onclick = () => { // Ru needs something to look at: go to the map if there is one, else ask for a disk first
+  if (!ru.label) { openSettings(); return; }
+  hog.returnTo = null;
+  if (scanDone) backToMap().then(() => ruOpen()); else { toast('Ru: map a disk with Di first, then ask me about anything on it', 'ru'); $('#disk-setup').hidden = false; $('#path').focus(); }
+};
+// ---- the gear: which AI Ru thinks with. Saved in ~/.dime/settings.json, switched live.
+const gearEl = $('#settings');
+async function openSettings() {
+  hideMenu(); let v; try { v = await api('/api/ru'); } catch (e) { toast(e.message); return; }
+  const h = v.have;
+  gearEl.innerHTML = `<div class="head"><b>Ru thinks with</b><button class="x" type="button" aria-label="Close">✕</button></div>
+    <label><input type="radio" name="ru" value="auto"><span>Auto <small>· first of: Claude, Codex, an endpoint</small></span></label>
+    <label><input type="radio" name="ru" value="claude"${h.claude ? '' : ' disabled'}><span>Claude Code CLI <small>· ${h.claude ? 'installed · read-only tool allowlist' : 'not found · claude.ai/code, then run claude once'}</small></span></label>
+    <label><input type="radio" name="ru" value="codex"${h.codex ? '' : ' disabled'}><span>Codex CLI <small>· ${h.codex ? 'installed · sandboxed, no writes' : 'not found · npm i -g @openai/codex, then run codex once'}</small></span></label>
+    <label><input type="radio" name="ru" value="api"><span>OpenAI-compatible endpoint <small>· no tools, judges from what Di shows${h.ollama ? ' · Ollama found' : ''}</small></span>
+      <div class="api"><input name="url" placeholder="URL, e.g. http://127.0.0.1:11434/v1 or https://api.openai.com/v1" spellcheck="false"><input name="model" placeholder="model, e.g. qwen3:8b or gpt-4o-mini" spellcheck="false"><input name="key" type="password" placeholder="${h.key_set ? 'API key (set)' : 'API key, if the endpoint needs one'}"></div></label>
+    <label><input type="radio" name="ru" value="none"><span>None <small>· Ru stays greyed out</small></span></label>
+    <div class="now">Now: ${v.current ? esc(v.current) : 'no AI'}</div>
+    <div class="foot"><button class="btn sm quiet" type="button">Cancel</button><button class="btn sm" type="button">Use this</button></div>`;
+  gearEl.querySelector(`input[value="${v.mode}"]`)?.removeAttribute('disabled'); (gearEl.querySelector(`input[value="${v.mode}"]`) ?? gearEl.querySelector('input[value="auto"]')).checked = true;
+  gearEl.querySelector('[name=url]').value = h.url; gearEl.querySelector('[name=model]').value = h.model;
+  const apiBox = gearEl.querySelector('.api'), sync = () => apiBox.classList.toggle('on', gearEl.querySelector('input[name=ru]:checked')?.value === 'api'); sync();
+  for (const r of gearEl.querySelectorAll('input[name=ru]')) r.onchange = sync;
+  gearEl.querySelector('.x').onclick = () => gearEl.close(); gearEl.querySelector('.foot .quiet').onclick = () => gearEl.close();
+  gearEl.querySelector('.foot .btn:not(.quiet)').onclick = async () => {
+    const mode = gearEl.querySelector('input[name=ru]:checked')?.value ?? 'auto';
+    try { const r = await api('/api/ru', { mode, url: gearEl.querySelector('[name=url]').value.trim(), model: gearEl.querySelector('[name=model]').value.trim(), key: gearEl.querySelector('[name=key]').value }); applyRu(r.current); toast(r.current ? `Ru: thinking with ${r.current}` : 'Ru: no AI, greyed out', 'ru'); gearEl.close(); }
+    catch (e) { toast(`Settings: ${e.message}`); }
+  };
+  gearEl.showModal();
+}
+$('#gear').onclick = openSettings;
+// ---- reset: forget the list, the chat, hidden folders and remembered state; purge the vault if asked; go home
+const resetEl = $('#resetdlg');
+$('#reset').onclick = async () => {
+  hideMenu(); let v = []; try { v = await api('/api/vault'); } catch {}
+  const snaps = (await api('/api/status').catch(() => ({}))).snapshots?.length ?? 0;
+  resetEl.innerHTML = `<div class="head">Start over</div><div class="sub">Clears your list, Ru's chat, hidden folders and everything DiMe remembers for every scan, then goes home. The AI setting stays.</div>
+    <label class="hot"><input type="checkbox" name="vault"${v.length ? ' checked' : ''}><span><b>Delete the vault for good</b> · ${v.length ? `${v.length} item${v.length === 1 ? '' : 's'} · ${fmt(sumOf(v))}` : 'empty'}<small>Everything moved there is removed from disk. Cannot be undone. Untick to keep it and restore later.</small></span></label>
+    <label><input type="checkbox" name="snapshots"><span>Forget last maps<small>${snaps ? `${snaps} saved map${snaps === 1 ? '' : 's'} reopen instantly; without them the next launch rescans.` : 'none saved'}</small></span></label>
+    <div class="foot"><button class="btn sm quiet" type="button">Cancel</button><button class="btn sm hot" type="button">Reset</button></div>`;
+  resetEl.querySelector('.quiet').onclick = () => resetEl.close();
+  resetEl.querySelector('.foot .hot').onclick = async () => {
+    const vault = resetEl.querySelector('[name=vault]').checked, snapshots = resetEl.querySelector('[name=snapshots]').checked;
+    let r; try { r = await api('/api/reset', { vault, snapshots }); } catch (e) { toast(`Reset: ${e.message}`); return; }
+    resetEl.close();
+    clearTimeout(stateTimer); stateLoaded = false;
+    picked.clear(); hiddenPaths.clear(); openRows.clear(); kidCache.clear(); navHist.length = 0; tiersOn.clear(); for (const t of ['safe', 'likely', 'review']) tiersOn.add(t);
+    filter = ''; idleDays = 0; syncFilterButtons();
+    ru.turns.length = 0; ru.sel.clear(); ru.pinned = false; ruMsgs.innerHTML = ''; ruEl.querySelector('.clear').hidden = true; ruClose();
+    vaultList = []; try { for (const k of Object.keys(localStorage)) if (k.startsWith('dime.')) localStorage.removeItem(k); } catch {}
+    if (snapshots) renderSnaps([]);
+    renderPickBar(); showLanding();
+    toast(vault && r.purged ? `Di: reset · ${r.purged} vault item${r.purged === 1 ? '' : 's'} deleted for good` : 'Di: reset', 'du');
+  };
+  resetEl.showModal();
+};
+ruEl.querySelector('.clear').onclick = () => { if (ru.busy) return; ru.turns.length = 0; ru.pinned = false; saveState(); ruMsgs.innerHTML = ''; ruEl.querySelector('.clear').hidden = true; ruCtxLine(); ruSuggest(); ruIn.focus(); };
+ruEl.querySelector('form').onsubmit = (e) => { e.preventDefault(); if (ru.busy) ru.abort?.abort(); else ruAsk(ruIn.value); }; // the Ask button is Stop while Ru works
+ruIn.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ruAsk(ruIn.value); } };
+ruIn.oninput = () => { ruIn.style.height = 'auto'; ruIn.style.height = `${Math.min(120, ruIn.scrollHeight)}px`; };
+// ---- drops: sidebar rows drag natively; map blocks are carried with press-and-hold (a native drag would fight the camera)
+const DND = 'text/dime-path';
+function dragSource(el, path) { el.draggable = true; el.addEventListener('dragstart', (e) => { e.dataTransfer.setData(DND, path); e.dataTransfer.effectAllowed = 'copy'; document.body.classList.add('carrying'); }); el.addEventListener('dragend', () => document.body.classList.remove('carrying')); }
+for (const t of [ruEl, $('#ru-fab')]) {
+  t.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes(DND)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; t.classList.add('drop'); } });
+  t.addEventListener('dragleave', () => t.classList.remove('drop'));
+  t.addEventListener('drop', (e) => { e.preventDefault(); t.classList.remove('drop'); document.body.classList.remove('carrying'); const p = e.dataTransfer.getData(DND); if (p === null || p === undefined) return; ruTake(p); });
+}
+function ruTake(path, source = 'drop') { if (!ru.label) { openSettings(); return; } if (!ru.open) ruOpen('selection'); else { ru.area = 'selection'; ru.pinned = true; } ruSelAdd(path, { source }); toast(`Ru: got ${path.split('/').pop() || rootName}`, 'ru'); }
+const carry = { on: null, timer: null, ghost: $('#carry') };
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  clearTimeout(carry.timer);
+  if (e.button !== 0 || mode !== 'disk' || scanning || !hovered) return;
+  const start = [e.clientX, e.clientY], n = hovered.userData.node, id = e.pointerId;
+  carry.timer = setTimeout(() => {
+    if (Math.hypot(mouse.px - start[0], mouse.py - start[1]) > 5) return;
+    carry.on = { path: n.path, name: n.name, size: n.size }; controls.enabled = false; document.body.classList.add('carrying');
+    renderer.domElement.setPointerCapture(id); carry.ghost.hidden = false; carry.ghost.textContent = `${n.name}${n.is_dir ? '/' : ''} · ${fmt(n.size)} · drop on Ru`; moveGhost(start[0], start[1]);
+  }, 320);
+});
+const moveGhost = (x, y) => { carry.ghost.style.left = `${x + 14}px`; carry.ghost.style.top = `${y + 14}px`; const over = document.elementFromPoint(x, y)?.closest('#ru, #ru-fab'); for (const t of [ruEl, $('#ru-fab')]) t.classList.toggle('drop', !!over && (over === t)); };
+renderer.domElement.addEventListener('pointermove', (e) => { mouse.px = e.clientX; mouse.py = e.clientY; if (carry.on) moveGhost(e.clientX, e.clientY); });
+addEventListener('pointerup', (e) => {
+  clearTimeout(carry.timer);
+  if (!carry.on) return;
+  const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('#ru, #ru-fab');
+  const it = carry.on; carry.on = null; controls.enabled = true; carry.ghost.hidden = true; document.body.classList.remove('carrying'); for (const t of [ruEl, $('#ru-fab')]) t.classList.remove('drop');
+  try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {}
+  if (over) ruTake(it.path);
+  downAt = null; // the hold was not a click
+}, true);
+// enough markdown for an answer: paragraphs, bullets, bold, code
+function md(t) {
+  const esc = (x) => x.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const inline = (x) => esc(x).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/^_(.+)_$/, '<i>$1</i>');
+  const out = []; let list = null;
+  for (const raw of t.split('\n')) {
+    const m = raw.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/);
+    if (m) { (list ??= []).push(`<li>${inline(m[1])}</li>`); continue; }
+    if (list) { out.push(`<ul>${list.join('')}</ul>`); list = null; }
+    if (raw.trim()) out.push(`<p>${inline(raw.replace(/^#+\s*/, ''))}</p>`);
+  }
+  if (list) out.push(`<ul>${list.join('')}</ul>`);
+  return out.join('');
+}
+function ruAdd(who, text) { const m = document.createElement('div'); m.className = `m ${who}`; if (who === 'me') m.textContent = text; else m.innerHTML = md(text); ruMsgs.appendChild(m); ruMsgs.scrollTop = ruMsgs.scrollHeight; return m; }
+const toolLine = (c) => { const t = tilde(String(c ?? '')); return (rootPath ? t.replaceAll(rootPath + '/', '') : t).slice(0, 90); };
+// ---- verdicts: Ru ends an actionable answer with a ```dime JSON block; it becomes buttons instead of text
+const splitVerdict = (t) => { const i = t.indexOf('```dime'); if (i < 0) return [t, null]; const j = t.indexOf('```', i + 7); let v = null; try { v = JSON.parse(t.slice(i + 7, j < 0 ? undefined : j)); } catch {} return [t.slice(0, i).trimEnd(), v]; };
+function verdictRows(paths) {
+  const rows = [], outside = [];
+  for (const abs of [...new Set(paths ?? [])]) {
+    const rel = relOf(abs); if (rel === null || rel === '') { outside.push(abs); continue; }
+    const it = ru.sel.get(rel), c = gunkSet.get(rel) ?? [...ru.sel.values()].flatMap((x) => x.flagged).find((x) => x.path === rel), n = current?.children.find((x) => x.path === rel) ?? [...ru.sel.values()].flatMap((x) => x.kids).find((x) => x.path === rel);
+    const size = it?.size ?? c?.size ?? n?.size ?? 0, is_dir = it?.is_dir ?? c?.is_dir ?? n?.is_dir ?? abs.endsWith('/');
+    rows.push({ key: rel, name: rel.split('/').pop(), is_dir, size, sub: [parentOf(rel) || rootName, c ? c.what : size ? '' : 'size unknown'].filter(Boolean).join(' · ') });
+  }
+  return [rows, outside];
+}
+function renderVerdict(m, v) {
+  const box = document.createElement('div'); box.className = 'verdict';
+  const groups = [['delete', 'Delete', 'hot'], ['archive', 'Move to vault', 'ru'], ['keep', 'Keep', 'quiet']].filter(([k]) => v[k]?.length);
+  if (!groups.length) return;
+  for (const [k, label, cls] of groups) { const g = document.createElement('div'); g.className = `vg ${cls}`; g.innerHTML = `<b></b><ul></ul>`; g.querySelector('b').textContent = `${label} · ${v[k].length}`; for (const p of v[k]) { const li = document.createElement('li'); li.textContent = tilde(p); g.querySelector('ul').appendChild(li); } box.appendChild(g); }
+  const acts = document.createElement('div'); acts.className = 'acts'; box.appendChild(acts);
+  const mk = (label, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = `btn sm ${cls}`; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
+  const go = [...(v.archive ?? []), ...(v.delete ?? [])], [goRows, outside] = verdictRows(go);
+  if (goRows.length) mk(`Add ${goRows.length} to list`, 'ru', () => { // Ru only nominates; the list is where you decide
+    for (const r of goRows) if (!picked.has(r.key)) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: v.delete?.some((p) => relOf(p) === r.key) ? 'likely' : 'review', reason: 'ru', what: 'Ru said it can go', note: v.delete?.some((p) => relOf(p) === r.key) ? 'Ru: delete.' : 'Ru: move to the vault.', age_days: 0 });
+    if (current) renderCleanup(); toast(`Di: ${goRows.length} added to your list`, 'du'); listDialog([...picked.values()].map(candRow));
+  });
+  if (outside.length) { const o = document.createElement('div'); o.className = 'note'; o.textContent = `${outside.length} path${outside.length === 1 ? ' is' : 's are'} outside the scan root and cannot be acted on here.`; box.appendChild(o); }
+  m.appendChild(box);
+}
+async function ruAsk(q) {
+  q = q.trim(); if (!q || ru.busy) return;
+  ru.busy = true; ruIn.value = ''; ruIn.style.height = 'auto';
+  ru.abort = new AbortController(); ruSend.classList.add('stop'); ruSend.innerHTML = '<i></i>'; ruSend.title = 'Stop';
+  ruAdd('me', q); ruSuggest();
+  try { vaultList = await api('/api/vault'); } catch {}
+  ruCtxLine();
+  const about = ruEl.querySelector('.focus .fs b')?.textContent ?? ruAreas().find((x) => x.id === ru.area)?.label ?? '', sentCtx = ruContext();
+  const transcript = ru.turns.slice(-8).map((t) => `${t.who === 'me' ? 'User' : 'Ru'}: ${t.text}`).join('\n\n');
+  const prompt = `What the user is looking at in DiMe right now:\n\n${sentCtx}\n\n${transcript ? `Conversation so far:\n\n${transcript}\n\n` : ''}User: ${q}`;
+  const m = ruAdd('ru', ''), status = document.createElement('div'); status.className = 'status'; status.textContent = 'Ru is thinking'; m.appendChild(status);
+  let text = '', lastBlock = null, outOfTurns = false;
+  const cap = () => { const c = document.createElement('div'); c.className = 'on'; c.textContent = `about ${about} · what Ru saw`; c.title = 'Show exactly what Ru was given for this answer'; c.onclick = () => { const p = c.nextElementSibling; if (p?.classList.contains('sent')) { p.remove(); return; } const pre = document.createElement('pre'); pre.className = 'sent'; pre.textContent = sentCtx; c.after(pre); }; return c; };
+  const render = () => { m.innerHTML = md(splitVerdict(text)[0]); m.prepend(cap()); m.appendChild(status); ruMsgs.scrollTop = ruMsgs.scrollHeight; };
+  const denied = [];
+  const handle = (d) => {
+    if (d.t === 'text') { text += d.d; render(); }
+    else if (d.t === 'tool') status.textContent = `Ru is checking ${toolLine(d.d)}`;
+    else if (d.t === 'denied') denied.push(d.d);
+    else if (d.t === 'provider') ruEl.querySelector('.ctx .lbl').textContent = `via ${d.d}`;
+    else if (d.t === 'done') { if (d.turns) outOfTurns = true; if (d.error && !text.trim()) text = d.error; }
+  };
+  try {
+    const r = await fetch('/api/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt }), signal: ru.abort.signal });
+    if (!r.ok) throw new Error(await r.text());
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (line) { try { handle(JSON.parse(line)); } catch {} } }
+    }
+  } catch (e) { text += `${text ? '\n\n' : ''}${e.name === 'AbortError' ? '_Stopped._' : `Ru lost the thread: ${e.message}`}`; }
+  status.remove();
+  if (denied.length) text += `\n\n_Not allowed to run: ${[...new Set(denied)].slice(0, 3).map((c) => `\`${c.slice(0, 240)}\``).join(' · ')}. Ru only gets read-only commands._`;
+  const [shown, verdict] = splitVerdict(text);
+  m.innerHTML = md(shown || 'Ru said nothing.'); m.prepend(cap()); if (verdict) renderVerdict(m, verdict); ruMsgs.scrollTop = ruMsgs.scrollHeight;
+  ru.turns.push({ who: 'me', text: q }, { who: 'ru', text: shown }); ruEl.querySelector('.clear').hidden = false; saveState();
+  ru.busy = false; ru.abort = null; ruSend.classList.remove('stop'); ruSend.textContent = 'Ask'; ruSend.title = ''; ruIn.focus();
+  if (outOfTurns && !verdict && !q.startsWith('Ru ran out of checks')) ruAsk('Ru ran out of checks before answering. Give the verdict now from what you found, no more checks.'); // one follow-up, with the transcript, so the work is not lost
+}

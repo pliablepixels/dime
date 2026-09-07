@@ -33,6 +33,9 @@ pub struct Candidate {
     pub age_days: i64,
     pub is_dir: bool,
     pub score: f64,
+    /// Set in the idle view: `size` is then the idle bytes inside, and this is the whole item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -104,6 +107,7 @@ fn walk(w: &mut Walk, n: &Node, path: &str, in_downloads: bool) {
             age_days: age,
             is_dir: c.is_dir,
             score: c.size as f64 * weight * (1.0 + age as f64 / 365.0),
+            full_size: None,
         };
         let name = c.name.as_str();
         if c.is_dir {
@@ -222,4 +226,12 @@ mod tests {
         assert_eq!(scan::get(&tree, "proj").unwrap().size + scan::get(&tree, "Downloads").unwrap().size, tree.size);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+/// Bytes under `n` belonging to files untouched since `cutoff` (files only; a folder counts what is inside it).
+pub fn idle_bytes(n: &Node, cutoff: i64) -> u64 {
+    if !n.is_dir {
+        return if n.atime.max(n.mtime) <= cutoff { n.size } else { 0 };
+    }
+    n.children.iter().map(|c| idle_bytes(c, cutoff)).sum()
 }
