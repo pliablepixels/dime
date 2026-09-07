@@ -2,6 +2,10 @@
 
 Di digs through your disk. Me watches your memory. Ru says what can go. Three explorers, one map.
 
+[![DiMe demo](docs/demo.gif)](https://youtu.be/4IOH1g5C7oI)
+
+*Click for the full video with sound.*
+
 ## Install
 
 macOS only (it leans on FSEvents, nettop, lsof and IOKit). Apple silicon or Intel.
