@@ -688,14 +688,15 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 });
 renderer.domElement.addEventListener('pointerleave', () => { mouse.set(-2, -2); tip.hidden = true; });
 let rotHold = false; // space during a scan: hold the slow lap still
-addEventListener('keydown', (e) => { if (e.key === ' ' && mode === 'disk' && scanning && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); rotHold = !rotHold; toast(rotHold ? 'Di: holding the camera · space to resume' : 'Di: circling again', 'du'); return; }
-  if (e.key === ' ' && mode === 'mem' && memView === 'orbit' && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); orbit.frozen = !orbit.frozen; toast(orbit.frozen ? 'Me: holding still · space to resume' : 'Me: live again', 'me'); $('#pause').setAttribute('aria-pressed', String(orbit.frozen)); $('#pause').textContent = orbit.frozen ? 'Paused' : 'Pause'; return; }
-  if (e.key === '/' && mode === 'mem' && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); $('#memq').focus(); return; }
+const typing = () => { const a = document.activeElement; return a?.tagName === 'INPUT' || a?.tagName === 'TEXTAREA' || a?.isContentEditable; }; // keyboard shortcuts stay out of text fields
+addEventListener('keydown', (e) => { if (e.key === ' ' && mode === 'disk' && scanning && !typing()) { e.preventDefault(); rotHold = !rotHold; toast(rotHold ? 'Di: holding the camera · space to resume' : 'Di: circling again', 'du'); return; }
+  if (e.key === ' ' && mode === 'mem' && memView === 'orbit' && !typing()) { e.preventDefault(); orbit.frozen = !orbit.frozen; toast(orbit.frozen ? 'Me: holding still · space to resume' : 'Me: live again', 'me'); $('#pause').setAttribute('aria-pressed', String(orbit.frozen)); $('#pause').textContent = orbit.frozen ? 'Paused' : 'Pause'; return; }
+  if (e.key === '/' && mode === 'mem' && !typing()) { e.preventDefault(); $('#memq').focus(); return; }
   if (e.key === 'Escape' && document.activeElement === $('#memq')) { $('#memq').value = ''; memFilter.q = ''; refilter(); $('#memq').blur(); return; }
-  if (e.key === 'm' && mode === 'disk' && hog.returnTo && document.activeElement?.tagName !== 'INPUT') { const to = hog.returnTo; hog.returnTo = null; hog.pendingSel = to.pid; enterHog(); return; }
+  if (e.key === 'm' && mode === 'disk' && hog.returnTo && !typing()) { const to = hog.returnTo; hog.returnTo = null; hog.pendingSel = to.pid; enterHog(); return; }
   if (dlg.open || gearEl.open || resetEl.open) return;
   if (e.key === 'Escape' && ru.open) { ruClose(); return; }
-  if ((e.key === 'Escape' || e.key === 'Backspace') && document.activeElement?.tagName !== 'INPUT') { e.preventDefault(); if (mode === 'mem') closeDrawer(); else selected ? setSelected(null) : goUp(); } });
+  if ((e.key === 'Escape' || e.key === 'Backspace') && !typing()) { e.preventDefault(); if (mode === 'mem') closeDrawer(); else selected ? setSelected(null) : goUp(); } });
 
 function setSelected(m) {
   selected = m;
