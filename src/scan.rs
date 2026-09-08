@@ -96,7 +96,7 @@ fn privacy_refusal(e: &std::io::Error) -> bool {
     e.raw_os_error() == Some(libc::EPERM)
 }
 
-/// Folders a scan never enters: system mounts under "/", and DiMe's own vault (moving something there must not just move it on the map).
+/// Folders a scan never enters: system mounts under "/", and DiMe's own shelf (moving something there must not just move it on the map).
 pub fn skip_list(root: &Path) -> Vec<PathBuf> {
     let mut skip: Vec<PathBuf> = if root == Path::new("/") { ["/dev", "/Volumes", "/System/Volumes", "/private/var/vm", "/proc"].iter().map(PathBuf::from).collect() } else { vec![] };
     if let Ok(h) = std::env::var("HOME") {

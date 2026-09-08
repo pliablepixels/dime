@@ -20,7 +20,7 @@ pub struct Settings {
     pub key: String,
 }
 fn settings_file() -> PathBuf {
-    crate::vault::dir().parent().unwrap().join("settings.json")
+    crate::shelf::dir().parent().unwrap().join("settings.json")
 }
 pub fn load_settings() -> Settings {
     std::fs::read(settings_file()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
@@ -140,7 +140,7 @@ async fn claude(w: &mut DuplexStream, label: &str, system: String, prompt: Strin
         .args(["-p", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--max-turns", "24"])
         .args(["--tools", "Read,Glob,Grep,Bash"]).arg("--allowedTools").args(CLAUDE_TOOLS)
         .arg("--append-system-prompt").arg(&system)
-        .arg("--add-dir").arg(&root).arg("--add-dir").arg(crate::vault::dir())
+        .arg("--add-dir").arg(&root).arg("--add-dir").arg(crate::shelf::dir())
         .current_dir(if root.is_dir() { root.clone() } else { PathBuf::from("/") })
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| std::io::Error::other(format!("could not start claude: {e}")))?;
@@ -189,7 +189,7 @@ async fn claude(w: &mut DuplexStream, label: &str, system: String, prompt: Strin
 async fn codex(w: &mut DuplexStream, label: &str, system: String, prompt: String, _root: PathBuf, path_env: String) -> std::io::Result<Option<String>> {
     emit(w, serde_json::json!({ "t": "provider", "d": label })).await?;
     // Seatbelt sandbox: writes only inside an empty scratch folder, reads everywhere, network on so `di` can reach Di's index
-    let scratch = crate::vault::dir().parent().unwrap().join("ru-scratch");
+    let scratch = crate::shelf::dir().parent().unwrap().join("ru-scratch");
     std::fs::create_dir_all(&scratch)?;
     let mut cmd = tokio::process::Command::new("codex");
     cmd.env("PATH", path_env)
@@ -251,7 +251,7 @@ async fn api(w: &mut DuplexStream, label: &str, url: String, key: Option<String>
 
 /// Ru's helper `di`, a GET-only shell wrapper over Di's index. Written to ~/.dime/bin; returns the folder to put on PATH.
 pub fn di_helper(port: &str) -> std::io::Result<PathBuf> {
-    let dir = crate::vault::dir().parent().unwrap().join("bin");
+    let dir = crate::shelf::dir().parent().unwrap().join("bin");
     std::fs::create_dir_all(&dir)?;
     let script = format!(r#"#!/bin/sh
 # di: query DiMe's in-memory index (read-only). Written by DiMe on each Ru question.

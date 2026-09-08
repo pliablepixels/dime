@@ -5,7 +5,7 @@ mod ru;
 mod rules;
 mod scan;
 mod snapshot;
-mod vault;
+mod shelf;
 
 use axum::{
     extract::{Query, State},
@@ -99,11 +99,16 @@ fn window(addr: &str) {
 
 /// Everything the HTTP server needs. Returns the address it is listening on; serving continues in the background.
 async fn serve() -> String {
-    // the data folder used to be ~/.dume; carry it over once so the vault, state and snapshots survive the rename
+    // two renames to carry over once: the data folder was ~/.dume, and the shelf inside it was the vault
     if let Ok(h) = std::env::var("HOME") {
-        let (old, new) = (PathBuf::from(&h).join(".dume"), PathBuf::from(&h).join(".dime"));
-        if old.is_dir() && !new.exists() {
-            let _ = std::fs::rename(&old, &new);
+        let dime = PathBuf::from(&h).join(".dime");
+        let dume = PathBuf::from(&h).join(".dume");
+        if dume.is_dir() && !dime.exists() {
+            let _ = std::fs::rename(&dume, &dime);
+        }
+        let (vault, shelf) = (dime.join("vault"), dime.join("shelf"));
+        if vault.is_dir() && !shelf.exists() {
+            let _ = std::fs::rename(&vault, &shelf);
         }
     }
     // scanning is bound by APFS, not by cores: past 8 threads directory reads contend and get slower
@@ -150,10 +155,10 @@ async fn serve() -> String {
         .route("/api/procfiles", get(procfiles))
         .route("/api/open", post(open_path))
         .route("/api/reveal", post(reveal))
-        .route("/api/vault", get(vault_list))
-        .route("/api/vault/archive", post(vault_archive))
-        .route("/api/vault/restore", post(vault_restore))
-        .route("/api/vault/purge", post(vault_purge))
+        .route("/api/shelf", get(shelf_list))
+        .route("/api/shelf/add", post(shelf_add))
+        .route("/api/shelf/restore", post(shelf_restore))
+        .route("/api/shelf/delete", post(shelf_purge))
         .route("/api/delete", post(delete_paths))
         .route("/api/ask", post(ask))
         .route("/api/ru", get(ru_get).post(ru_set))
@@ -571,7 +576,7 @@ async fn open_path(State(app): State<Shared>, Json(req): Json<PathReq>) -> Resul
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---------- cleanup actions: archive to the vault, delete, restore ----------
+// ---------- cleanup actions: shelve, delete, put back ----------
 
 #[derive(Deserialize)]
 struct PathsReq {
@@ -611,15 +616,15 @@ struct Outcome {
     error: Option<String>,
 }
 
-/// Resolve a path for a destructive action: inside the root, not the root itself, not holding the vault.
+/// Resolve a path for a destructive action: inside the root, not the root itself, not holding the shelf.
 fn target(app: &App, rel: &str) -> Result<(String, PathBuf, u64, String), ApiErr> {
     let (rel, abs) = resolve(app, rel)?;
     let is_root = with_tree(app, |root, _| Ok(abs == root))?;
     if rel.is_empty() || is_root {
         return Err(bad("refusing to touch the scan root"));
     }
-    if vault::dir().starts_with(&abs) {
-        return Err(bad("that holds the vault"));
+    if shelf::dir().starts_with(&abs) {
+        return Err(bad("that holds the shelf"));
     }
     let size = with_tree(app, |_, t| Ok(scan::get(t, &rel).map(|n| n.size).unwrap_or(0)))?;
     let note = candidates(app)?.iter().find(|c| c.path == rel).map(|c| format!("{} · {}", c.what, c.note)).unwrap_or_default();
@@ -637,20 +642,20 @@ fn touched(app: &App, paths: &[PathBuf]) {
     app.version.fetch_add(1, Ordering::Relaxed);
 }
 
-async fn vault_list() -> Json<Vec<vault::Entry>> {
-    Json(vault::list())
+async fn shelf_list() -> Json<Vec<shelf::Entry>> {
+    Json(shelf::list())
 }
 
-async fn vault_archive(State(app): State<Shared>, Json(req): Json<PathsReq>) -> Json<Vec<Outcome>> {
+async fn shelf_add(State(app): State<Shared>, Json(req): Json<PathsReq>) -> Json<Vec<Outcome>> {
     tokio::task::spawn_blocking(move || {
         let mut out = vec![];
         let mut moved = vec![];
         let idle = req.idle.map(cutoff_for);
         for key in req.paths {
             let r = target(&app, &key).map_err(|e| e.1).and_then(|(rel, abs, size, note)| match idle {
-                Some(cut) if abs.is_dir() => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, bytes)| vault::archive_partial(&abs, &files, bytes, format!("{note} · only files idle at the time")).map(|_| files.iter().map(|f| abs.join(f)).collect::<Vec<_>>()).map_err(|e| e.to_string())),
-                Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| if files.is_empty() { Err("not idle that long".into()) } else { vault::archive(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()) }),
-                None => vault::archive(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()),
+                Some(cut) if abs.is_dir() => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, bytes)| shelf::shelve_partial(&abs, &files, bytes, format!("{note} · only files idle at the time")).map(|_| files.iter().map(|f| abs.join(f)).collect::<Vec<_>>()).map_err(|e| e.to_string())),
+                Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| if files.is_empty() { Err("not idle that long".into()) } else { shelf::shelve(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()) }),
+                None => shelf::shelve(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()),
             });
             match r {
                 Ok(paths) => { moved.extend(paths); out.push(Outcome { key, ok: true, error: None }) }
@@ -674,10 +679,10 @@ async fn delete_paths(State(app): State<Shared>, Json(req): Json<PathsReq>) -> J
                 Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| {
                     if files.is_empty() { return Err("not idle that long".into()); }
                     let mut done = vec![];
-                    for f in &files { let p = if f.as_os_str().is_empty() { abs.clone() } else { abs.join(f) }; vault::delete(&p).map_err(|e| e.to_string())?; done.push(p); } // a file candidate is its own only entry
+                    for f in &files { let p = if f.as_os_str().is_empty() { abs.clone() } else { abs.join(f) }; shelf::delete(&p).map_err(|e| e.to_string())?; done.push(p); } // a file candidate is its own only entry
                     Ok(done)
                 }),
-                None => vault::delete(&abs).map(|_| vec![abs]).map_err(|e| e.to_string()),
+                None => shelf::delete(&abs).map(|_| vec![abs]).map_err(|e| e.to_string()),
             });
             match r {
                 Ok(paths) => { gone.extend(paths); out.push(Outcome { key, ok: true, error: None }) }
@@ -691,12 +696,12 @@ async fn delete_paths(State(app): State<Shared>, Json(req): Json<PathsReq>) -> J
     .unwrap()
 }
 
-async fn vault_restore(State(app): State<Shared>, Json(req): Json<IdsReq>) -> Json<Vec<Outcome>> {
+async fn shelf_restore(State(app): State<Shared>, Json(req): Json<IdsReq>) -> Json<Vec<Outcome>> {
     tokio::task::spawn_blocking(move || {
         let mut out = vec![];
         let mut back = vec![];
         for key in req.ids {
-            match vault::restore(&key) {
+            match shelf::restore(&key) {
                 Ok((_, paths)) => { back.extend(paths); out.push(Outcome { key, ok: true, error: None }) }
                 Err(e) => out.push(Outcome { key, ok: false, error: Some(e.to_string()) }),
             }
@@ -708,9 +713,9 @@ async fn vault_restore(State(app): State<Shared>, Json(req): Json<IdsReq>) -> Js
     .unwrap()
 }
 
-async fn vault_purge(Json(req): Json<IdsReq>) -> Json<Vec<Outcome>> {
+async fn shelf_purge(Json(req): Json<IdsReq>) -> Json<Vec<Outcome>> {
     tokio::task::spawn_blocking(move || {
-        Json(req.ids.into_iter().map(|key| match vault::purge(&key) {
+        Json(req.ids.into_iter().map(|key| match shelf::purge(&key) {
             Ok(_) => Outcome { key, ok: true, error: None },
             Err(e) => Outcome { key, ok: false, error: Some(e.to_string()) },
         }).collect())
@@ -727,12 +732,12 @@ Di has already scanned the whole tree and keeps it in memory. Ask Di before touc
 `di flagged <rel>` everything Di flagged under it, with tier, reason, note; \
 `di find <name-substring> [rel] [limit]` name search across the tree, biggest first; \
 `di idle <rel> <days>` the biggest files untouched that long. Output is JSON; pipe through jq to trim it. Only walk the disk yourself (ls, du, find) for what Di does not hold: file contents, permissions, ownership, symlink targets, files under 1 MB Di skipped, or whether a file is open. \
-Di finds; you validate. Di's flags are guesses from names, sizes and ages. Your job is to check each candidate against reality before it goes: is it open or in use right now (lsof, ps), does a running or installed app still depend on it, is it referenced by a config or a project next to it, was it touched recently, would it be regenerated, and what breaks without it. Then give a verdict per item: delete, move to the vault (reversible, in ~/.dime/vault), or keep, with the reason in one line. When you could not verify, say so and prefer archive. \
+Di finds; you validate. Di's flags are guesses from names, sizes and ages. Your job is to check each candidate against reality before it goes: is it open or in use right now (lsof, ps), does a running or installed app still depend on it, is it referenced by a config or a project next to it, was it touched recently, would it be regenerated, and what breaks without it. Then give a verdict per item: it can go, or it should be kept, with the reason in one line. You never choose where something goes; the user decides that from their shortlist, and the default is the shelf (~/.dime/shelf), which holds things until they delete them for good. When you could not verify, say so and lean towards keeping. \
 You may inspect with read-only tools: files and metadata (ls, du, df, file, stat, mdls, mdfind, head, tail, wc, xattr -l, plutil -p, codesign -d, Read, Glob, Grep; no find, sort or awk: use di find and jq instead) and processes and the system (ps, pgrep, lsof, top -l 1, vm_stat, sysctl, launchctl list, diskutil info, brew list). Use them when the context cannot tell you something, like what an unknown folder holds, whether a file is still open, or what a process is doing. Anything that writes, and sudo, is not available to you: say so plainly if a question needs it, and suggest what the user could run themselves. Never modify, move, or delete anything; the user does that from DiMe. \
 Be economical with checks: batch related commands into one call, and stop checking once you can judge; always finish with the verdict even if a check was refused or you ran short of turns. \
 Mounted volumes under a folder (for example simulator runtime images under CoreSimulator/Volumes) are not counted by Di and cannot be moved; the space lives in the .dmg they are mounted from. \
 Answer in short paragraphs and bullets, plain language, no headings, sizes in human units. Do not restate the context back. End with a one-line verdict when a decision was asked for. \
-When your answer recommends what to do with specific items, finish with a fenced code block tagged dime holding JSON of the form {\"archive\": [...], \"delete\": [...], \"keep\": [...]} with absolute paths only, taken from the context or from what you inspected. archive means move to the vault (reversible), delete means remove for good; the vault is where things wait before a final delete. DiMe turns that block into buttons; leave it out when nothing should change.";
+When your answer recommends what to do with specific items, finish with a fenced code block tagged dime holding JSON of the form {\"go\": [...], \"keep\": [...]} with absolute paths only, taken from the context or from what you inspected. go means the item can leave and belongs on the shortlist; keep means it should stay, and DiMe takes it off the shortlist if Di put it there. DiMe turns that block into buttons; leave it out when nothing should change.";
 
 #[derive(Deserialize)]
 struct AskReq {
@@ -831,24 +836,24 @@ fn have(tool: &str) -> bool {
 
 #[derive(Deserialize)]
 struct ResetReq {
-    /// Delete everything in the vault for good.
+    /// Delete everything on the shelf for good.
     #[serde(default)]
-    vault: bool,
+    shelf: bool,
     /// Forget the last maps (snapshots).
     #[serde(default)]
     snapshots: bool,
 }
-/// Start over: forget every root's remembered state; optionally purge the vault and the snapshots. Settings (the AI choice) stay.
+/// Start over: forget every root's remembered state; optionally empty the shelf and forget the snapshots. Settings (the AI choice) stay.
 async fn reset(State(app): State<Shared>, Json(req): Json<ResetReq>) -> Result<Json<serde_json::Value>, ApiErr> {
     let _g = STATE_LOCK.lock().unwrap();
     let _ = std::fs::remove_file(state_file());
     let mut purged = 0;
-    if req.vault {
-        for e in vault::list() { if vault::purge(&e.id).is_ok() { purged += 1; } }
-        if let Ok(rd) = std::fs::read_dir(vault::dir()) { for e in rd.flatten() { if e.path().is_dir() { let _ = std::fs::remove_dir_all(e.path()); } } } // orphans from interrupted moves
+    if req.shelf {
+        for e in shelf::list() { if shelf::purge(&e.id).is_ok() { purged += 1; } }
+        if let Ok(rd) = std::fs::read_dir(shelf::dir()) { for e in rd.flatten() { if e.path().is_dir() { let _ = std::fs::remove_dir_all(e.path()); } } } // orphans from interrupted moves
     }
     if req.snapshots {
-        let _ = std::fs::remove_dir_all(vault::dir().parent().unwrap().join("snapshots"));
+        let _ = std::fs::remove_dir_all(shelf::dir().parent().unwrap().join("snapshots"));
     }
     drop(_g);
     let _ = &app;

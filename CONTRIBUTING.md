@@ -20,7 +20,7 @@ The frontend is `static/index.html` and `static/app.js`, served from disk. Edit,
 | `src/gunk.rs` | Runs the rules over the tree, scores and groups candidates |
 | `src/hog.rs` | Process sampling for Me |
 | `src/ru.rs` | Ru's providers: Claude Code CLI, Codex CLI, OpenAI-compatible API |
-| `src/vault.rs` | Move items out with restore and purge |
+| `src/shelf.rs` | The shelf: move items aside, put them back, delete them for good |
 | `src/snapshot.rs` | Saves the finished tree so the next launch opens instantly |
 | `src/main.rs` | HTTP routes, shared state, reset |
 | `static/app.js` | The whole UI. Sections marked with `// ----` comments |

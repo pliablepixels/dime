@@ -906,9 +906,9 @@ function renderCleanup() {
   head.innerHTML = `<div class="big"></div><div class="scope"></div>`;
   head.querySelector('.big').innerHTML = easy ? `${fmt(easy)}<small>safe to free</small>` : review ? `${fmt(review)}<small>worth a look</small>` : `Nothing to clean<small>here</small>`;
   if (easy && review) head.querySelector('.big').insertAdjacentHTML('afterend', `<div class="plus">plus ${fmt(review)} worth a look</div>`);
-  const vb = document.createElement('button'); vb.id = 'vault'; vb.className = 'btn sm quiet'; vb.textContent = 'Vault'; vb.title = 'Archived items, restorable any time'; vb.style.marginTop = '10px'; vb.onclick = openVault; head.appendChild(vb);
-  api('/api/vault').then((v) => { vaultList = v; if (v.length) vb.textContent = `Vault · ${v.length} · ${fmt(sumOf(v))}`; }).catch(() => {});
-  if (picked.size) { const lb = document.createElement('button'); lb.className = 'btn sm quiet'; lb.textContent = `List · ${picked.size}`; lb.title = 'Review your list; move to the vault or delete from there'; lb.style.marginTop = '10px'; lb.style.marginLeft = '8px'; lb.onclick = () => listDialog([...picked.values()].map(candRow)); head.appendChild(lb); }
+  const vb = document.createElement('button'); vb.id = 'shelf'; vb.className = 'btn sm quiet'; vb.textContent = 'Shelf'; vb.title = 'Shelved items, still on your disk, put back any time'; vb.style.marginTop = '10px'; vb.onclick = openShelf; head.appendChild(vb);
+  api('/api/shelf').then((v) => { shelfList = v; if (v.length) vb.textContent = `Shelf · ${v.length} · ${fmt(sumOf(v))}`; }).catch(() => {});
+  if (picked.size) { const lb = document.createElement('button'); lb.className = 'btn sm quiet'; lb.textContent = `Shortlist · ${picked.size}`; lb.title = 'Review the shortlist; shelve or delete from there'; lb.style.marginTop = '10px'; lb.style.marginLeft = '8px'; lb.onclick = () => listDialog([...picked.values()].map(candRow)); head.appendChild(lb); }
   const xb = document.createElement('button'); xb.className = 'btn sm quiet'; xb.textContent = 'Export'; xb.title = 'Save this cleanup view as a Markdown report'; xb.style.marginTop = '10px'; xb.style.marginLeft = '8px'; xb.onclick = exportReport; head.appendChild(xb);
   const scope = head.querySelector('.scope');
   scope.textContent = `${idle ? `untouched ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+ · ` : ''}${current.path ? `in ${current.name} · ` : `in ${rootName}, ${fmtN(current.files)} files`}`;
@@ -948,16 +948,16 @@ function renderCleanup() {
   renderPickBar(); ruSync();
 }
 
-// ---------- act on picks: archive to the vault or delete, always after a look at the list ----------
+// ---------- acting on the shortlist: shelve or delete, always after a look at what is on it ----------
 const picked = new Map(); // path -> candidate, kept while you browse so you can gather from several folders
-let vaultList = [];
+let shelfList = [];
 const sumOf = (rows) => rows.reduce((s, r) => s + r.size, 0);
 function renderPickBar() {
   saveState();
   const bar = $('#clean-bar'); bar.hidden = !picked.size; if (!picked.size) return;
   const n = picked.size;
-  bar.innerHTML = `<div><b></b><button class="clr" type="button">clear list</button></div><button class="btn sm quiet" type="button">Review list</button>`;
-  bar.querySelector('b').textContent = `${n} on your list · ${fmt(sumOf([...picked.values()]))}`;
+  bar.innerHTML = `<div><b></b><button class="clr" type="button">clear it</button></div><button class="btn sm quiet" type="button">Review shortlist</button>`;
+  bar.querySelector('b').textContent = `${n} on your shortlist · ${fmt(sumOf([...picked.values()]))}`;
   bar.querySelector('.clr').onclick = () => { picked.clear(); saveState(); renderCleanup(); };
   bar.querySelector('.btn').onclick = () => listDialog([...picked.values()].map(candRow));
 }
@@ -992,7 +992,7 @@ function candRowEl(c, base, depth) {
   const wrap = document.createDocumentFragment();
   const rel = c.path.startsWith(base) ? c.path.slice(base.length) : c.path;
   const row = document.createElement('div'); row.className = 'row pick'; row.dataset.key = c.path; row.tabIndex = 0; row.style.paddingLeft = `${28 + depth * 18}px`;
-  row.innerHTML = `<input class="pk" type="checkbox" aria-label="Add to list" title="Add to your list. Nothing moves until you act from the list."><div><div class="name"></div><div class="sub"></div></div><div class="sz"></div><span class="acts"><button class="mp" type="button" title="Show on the map">Map</button><button class="fb" type="button">Finder</button></span>`;
+  row.innerHTML = `<input class="pk" type="checkbox" aria-label="Add to shortlist" title="Add to your shortlist. Nothing moves until you act from there."><div><div class="name"></div><div class="sub"></div></div><div class="sz"></div><span class="acts"><button class="mp" type="button" title="Show on the map">Map</button><button class="fb" type="button">Finder</button></span>`;
   const pk = row.querySelector('.pk'); pk.checked = picked.has(c.path); row.classList.toggle('picked', pk.checked);
   pk.onclick = (e) => e.stopPropagation(); pk.onchange = () => { pk.checked ? picked.set(c.path, c) : picked.delete(c.path); renderCleanup(); };
   dragSource(row, c.path);
@@ -1022,28 +1022,28 @@ function candRowEl(c, base, depth) {
   }
   return wrap;
 }
-// your list: the only place a destructive action starts. Ticks only add here; Move to vault (reversible) or Delete (gated) act on what is checked.
+// the shortlist: the only place a destructive action starts. Ticks only gather here; Shelve (reversible) or Delete (gated) act on what is checked.
 const idleOpt = () => filter === 'idle' ? { idle: idleDays } : {}; // in the idle view only the files that old move or go
 function listDialog(rows, sub) {
   const idle = filter === 'idle', days = idleDays >= 365 ? 'a year' : `${idleDays} days`;
-  sub ??= `Nothing has moved yet. Checked items are what the buttons act on. Move to vault puts them in ~/.dime/vault, reversible from the Vault${idle ? `, and in this idle view only the files inside each item untouched for ${days}+ move` : ''}. Delete asks again.`;
-  openDialog({ title: 'Your list', sub, rows, select: true, actions: [
-    { cls: 'hot quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the vault.` : 'Removed from disk right away. Not the Trash, not the vault.', rows: c, select: false, gate: 'I understand this cannot be undone. Move to the vault instead if unsure.',
+  sub ??= `Nothing has moved yet. Checked items are what the buttons act on. Shelving moves them to ~/.dime/shelf, where they stay on your disk until you delete them, so nothing is freed yet and everything can go back${idle ? `. In this idle view only the files inside each item untouched for ${days}+ move` : ''}. Delete asks again.`;
+  openDialog({ title: 'Shortlist', sub, rows, select: true, actions: [
+    { cls: 'hot quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the shelf.` : 'Removed from disk right away. Not the Trash, not the shelf.', rows: c, select: false, gate: 'I understand this cannot be undone. Shelve it instead if unsure.',
       actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/delete', { paths: x.map((r) => r.key), ...idleOpt() }, 'deleted') }] }) },
-    { label: (c) => `Move ${c.length} to vault · ${fmt(sumOf(c))}`, fn: (c) => act('/api/vault/archive', { paths: c.map((r) => r.key), ...idleOpt() }, 'moved to the vault') },
+    { label: (c) => `Shelve ${c.length} · ${fmt(sumOf(c))}`, fn: (c) => act('/api/shelf/add', { paths: c.map((r) => r.key), ...idleOpt() }, 'shelved') },
   ] });
 }
-async function openVault() {
-  try { vaultList = await api('/api/vault'); } catch (e) { toast(e.message); return; }
-  const rows = vaultList.map((e) => ({ key: e.id, name: e.name, is_dir: e.is_dir, size: e.size, checked: false, sub: [tilde(parentOf(e.from)), e.partial ? `${e.count} idle file${e.count === 1 ? '' : 's'} out of it, the rest stayed` : '', new Date(e.archived_at * 1000).toLocaleDateString(), e.note].filter(Boolean).join(' · ') }));
-  openDialog({ title: 'Vault', sub: rows.length ? `${rows.length} item${rows.length === 1 ? '' : 's'} · ${fmt(sumOf(rows))} waiting in ~/.dime/vault. Restore puts things back exactly where they were.` : 'Nothing archived yet. Pick items in Cleanup and choose Archive.',
+async function openShelf() {
+  try { shelfList = await api('/api/shelf'); } catch (e) { toast(e.message); return; }
+  const rows = shelfList.map((e) => ({ key: e.id, name: e.name, is_dir: e.is_dir, size: e.size, checked: false, sub: [tilde(parentOf(e.from)), e.partial ? `${e.count} idle file${e.count === 1 ? '' : 's'} out of it, the rest stayed` : '', new Date(e.shelved_at * 1000).toLocaleDateString(), e.note].filter(Boolean).join(' · ') }));
+  openDialog({ title: 'Shelf', sub: rows.length ? `${rows.length} item${rows.length === 1 ? '' : 's'} · ${fmt(sumOf(rows))} on the shelf in ~/.dime/shelf. Still on your disk: deleting from here is what frees the space. Put back returns things exactly where they were.` : 'Nothing on the shelf yet. Tick items in Cleanup, then shelve them from the shortlist.',
     rows, select: true,
     actions: [
-      { label: (c) => `Restore ${c.length}`, fn: (c) => act('/api/vault/restore', { ids: c.map((r) => r.key) }, 'restored') },
-      { cls: 'hot', label: (c) => `Delete forever ${c.length}…`, fn: (c) => openDialog({ title: 'Delete from the vault', sub: 'Removed from the vault and from disk.', rows: c, select: false, gate: 'I understand this cannot be undone.',
-        actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/vault/purge', { ids: x.map((r) => r.key) }, 'deleted') }] }) },
+      { label: (c) => `Put back ${c.length}`, fn: (c) => act('/api/shelf/restore', { ids: c.map((r) => r.key) }, 'put back') },
+      { cls: 'hot', label: (c) => `Delete ${c.length} for good…`, fn: (c) => openDialog({ title: 'Delete for good', sub: 'Removed from the shelf and from your disk. This is the step that frees the space.', rows: c, select: false, gate: 'I understand this cannot be undone.',
+        actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/shelf/delete', { ids: x.map((r) => r.key) }, 'deleted') }] }) },
     ] });
-  if (rows.length) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sm ru'; b.textContent = '✦ Ask Ru'; b.style.marginRight = 'auto'; b.onclick = () => { dlg.close(); ruOpen('vault'); }; dlg.querySelector('.foot').prepend(b); }
+  if (rows.length) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sm ru'; b.textContent = '✦ Ask Ru'; b.style.marginRight = 'auto'; b.onclick = () => { dlg.close(); ruOpen('shelf'); }; dlg.querySelector('.foot').prepend(b); }
 }
 const nestedIn = (p, keys) => keys.some((k) => k !== p && (k === '' || p.startsWith(k + '/')));
 async function act(url, body, verb) {
@@ -1054,7 +1054,7 @@ async function act(url, body, verb) {
   for (const p of [...ru.sel.keys()]) if (ok.some((r) => p === r.key || p.startsWith(r.key + '/'))) ru.sel.delete(p);
   toast(bad.length ? `Di: ${ok.length} ${verb}, ${bad.length} failed · ${bad[0].error}` : `Di: ${ok.length} item${ok.length === 1 ? '' : 's'} ${verb}`, 'du');
   if (!current) { renderPickBar(); return; }
-  if (url !== '/api/vault/purge' && ok.some((r) => current.path === r.key || current.path.startsWith(r.key + '/'))) { const gone = ok.find((r) => current.path === r.key || current.path.startsWith(r.key + '/')); navHist.length = 0; await navigate(parentOf(gone.key)); return; } // the folder we were in is gone: step out of it
+  if (url !== '/api/shelf/delete' && ok.some((r) => current.path === r.key || current.path.startsWith(r.key + '/'))) { const gone = ok.find((r) => current.path === r.key || current.path.startsWith(r.key + '/')); navHist.length = 0; await navigate(parentOf(gone.key)); return; } // the folder we were in is gone: step out of it
   await refresh({ force: true });
 }
 
@@ -1959,7 +1959,7 @@ function exportReport() {
   if (!current || !summaryData) return;
   const abs = (p) => rootPath + (p ? '/' + p : '');
   const L = [`# DiMe cleanup report`, ``, `- Scan root: ${rootPath || '/'}`, `- Folder: ${abs(current.path)} · ${nodeInfo(current)}`, filter === 'idle' ? `- Filter: only items untouched for ${idleDays}+ days` : '', `- Generated: ${new Date().toLocaleString()}`,
-    `- How to read this: Di flags candidates in three tiers. "Safe to remove" is regenerated automatically; "Probably safe" is usually fine after a glance; "Worth a look" is big or old and your call. Sizes are on-disk. Move to vault puts an item into ~/.dime/vault (reversible); delete is permanent.`, ``];
+    `- How to read this: Di flags candidates in three tiers. "Safe to remove" is regenerated automatically; "Probably safe" is usually fine after a glance; "Worth a look" is big or old and your call. Sizes are on-disk. Shelving moves an item into ~/.dime/shelf, still on the disk and reversible; deleting is permanent and is what frees the space.`, ``];
   const totals = filter === 'idle' ? new Map() : new Map(summaryData.kinds.map(([id, , , size, n]) => [id, [size, n]]));
   const list = cleanList(), kinds = [...new Set(list.map((c) => c.reason))].map((id) => { const items = list.filter((c) => c.reason === id && !hiddenUnder(c.path)), [size, n] = totals.get(id) ?? [sumOf(items), items.length]; return { id, tier: items[0]?.tier, what: items[0]?.what, size: Math.max(size, sumOf(items)), n: Math.max(n, items.length), items }; }).filter((k) => k.items.length).sort((x, y) => TIER_ORDER[x.tier] - TIER_ORDER[y.tier] || y.size - x.size);
   const tierTotal = (t) => kinds.filter((k) => k.tier === t).reduce((a, k) => [a[0] + k.size, a[1] + k.n], [0, 0]);
@@ -1974,14 +1974,14 @@ function exportReport() {
   }
   if (picked.size) L.push(`## Ticked by the user`, ``, ...[...picked.values()].map((c) => `- ${abs(c.path)} · ${fmt(c.size)} · ${TIER_LABEL[c.tier]} · ${c.what}`), ``);
   if (hiddenPaths.size) L.push(`## Hidden from the map by the user`, ``, ...[...hiddenPaths.values()].map((n) => `- ${abs(n.path)} · ${fmt(n.size)}`), ``);
-  if (vaultList.length) L.push(`## In the vault`, ``, ...vaultList.map((e) => `- ${e.name}${e.is_dir ? '/' : ''} · ${fmt(e.size)} · from ${e.from} · archived ${new Date(e.archived_at * 1000).toLocaleDateString()}${e.note ? ` · ${e.note}` : ''}`), ``);
+  if (shelfList.length) L.push(`## On the shelf`, ``, ...shelfList.map((e) => `- ${e.name}${e.is_dir ? '/' : ''} · ${fmt(e.size)} · from ${e.from} · shelved ${new Date(e.shelved_at * 1000).toLocaleDateString()}${e.note ? ` · ${e.note}` : ''}`), ``);
   const blob = new Blob([L.join('\n')], { type: 'text/markdown' }), a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = `dime-cleanup-${(current.path ? current.name : rootName).replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.md`;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   toast(`Di: report saved · ${a.download}`, 'du');
 }
 
-// ---------- Ru: the wise one. Three areas it can look at: your Selection, the Folder in view, the Vault ----------
+// ---------- Ru: the wise one. Three areas it can look at: your Selection, the Folder in view, the Shelf ----------
 const ru = { open: false, busy: false, turns: [], area: 'folder', pinned: false, abort: null, sel: new Map(), label: null }; // sel: rel path -> item; label: the AI behind Ru, null when none
 const ruEl = $('#ru'), ruMsgs = ruEl.querySelector('.msgs'), ruIn = ruEl.querySelector('textarea'), ruSend = ruEl.querySelector('.ask .btn');
 const absOf = (p) => rootPath + (p ? '/' + p : '');
@@ -2021,7 +2021,7 @@ function ruReconcile() {
 const ruAreas = () => [
   { id: 'selection', label: mode === 'mem' && hog.sel ? 'Process' : ru.sel.size ? `Selection ${ru.sel.size}` : 'Selection', on: mode === 'mem' ? !!hog.sel : ru.sel.size > 0, hint: 'what you clicked, ticked, or dragged in' },
   { id: 'folder', label: 'Folder', on: mode === 'disk' && !!current, hint: 'the folder in view' },
-  { id: 'vault', label: vaultList.length ? `Vault ${vaultList.length}` : 'Vault', on: vaultList.length > 0, hint: 'archived items' },
+  { id: 'shelf', label: shelfList.length ? `Shelf ${shelfList.length}` : 'Shelf', on: shelfList.length > 0, hint: 'shelved items' },
 ];
 function ruContext() {
   const L = [];
@@ -2043,8 +2043,8 @@ function ruContext() {
         L.push(`### ${head}${kids ? `\n  Inside, biggest first:\n${kids}` : ''}${fl ? `\n  Di flagged inside it (${it.flagged.length} in all):\n${fl}` : ''}`);
       }
     }
-  } else if (ru.area === 'vault') {
-    L.push('SUBJECT, the vault (~/.dime/vault). The user archived these; each can be restored to its original path or purged for good:\n' + vaultList.map((e) => `- ${e.name}${e.is_dir ? '/' : ''} · ${fmt(e.size)} · from ${e.from} · archived ${new Date(e.archived_at * 1000).toLocaleDateString()}${e.note ? ` · ${e.note}` : ''}`).join('\n'));
+  } else if (ru.area === 'shelf') {
+    L.push('SUBJECT, the shelf (~/.dime/shelf). The user set these aside; they still sit on the disk, and each can be put back to its original path or deleted for good:\n' + shelfList.map((e) => `- ${e.name}${e.is_dir ? '/' : ''} · ${fmt(e.size)} · from ${e.from} · shelved ${new Date(e.shelved_at * 1000).toLocaleDateString()}${e.note ? ` · ${e.note}` : ''}`).join('\n'));
   } else if (current) {
     L.push(`SUBJECT, the folder in view: ${absOf(current.path)}\n${nodeInfo(current)}`);
     const kids = current.children.filter((c) => c.path && !hiddenPaths.has(c.path)).slice(0, 30);
@@ -2054,7 +2054,7 @@ function ruContext() {
   }
   const also = [];
   if (ru.area !== 'folder' && mode === 'disk' && current) also.push(`folder in view ${absOf(current.path)}`);
-  if (ru.area !== 'vault' && vaultList.length) also.push(`${vaultList.length} item${vaultList.length === 1 ? '' : 's'} in the vault`);
+  if (ru.area !== 'shelf' && shelfList.length) also.push(`${shelfList.length} item${shelfList.length === 1 ? '' : 's'} on the shelf`);
   if (ru.area !== 'selection' && ru.sel.size) also.push(`${ru.sel.size} item${ru.sel.size === 1 ? '' : 's'} in the user's selection`);
   L.push(`Scan root: ${rootPath || '/'}${also.length ? `. Also on screen, not the subject: ${also.join('; ')}.` : ''}`);
   return L.join('\n\n');
@@ -2071,7 +2071,7 @@ function ruPeek() {
       head = one ? `<b>${esc(one.name)}${one.is_dir ? '/' : ''}</b> <small>· ${fmt(one.size)} · ${{ map: 'selected on the map', tick: 'ticked in Cleanup', drop: 'dragged in', menu: 'sent from a menu' }[one.source]}</small>` : `<b>${its.length} items</b> <small>· ${fmt(its.reduce((a, it) => a + it.size, 0))} · your selection</small>`;
       bits.push(`${its.reduce((a, it) => a + Math.min(12, it.kids.length), 0)} inside`, `${its.reduce((a, it) => a + Math.min(12, it.flagged.length), 0)} flagged by Di`, its.some((it) => !it.ready) ? 'still loading' : '');
     }
-  } else if (ru.area === 'vault') { head = `<b>the Vault</b> <small>· ${vaultList.length} archived item${vaultList.length === 1 ? '' : 's'} · ${fmt(sumOf(vaultList))}</small>`; bits.push('every item, with where it came from'); }
+  } else if (ru.area === 'shelf') { head = `<b>the Shelf</b> <small>· ${shelfList.length} shelved item${shelfList.length === 1 ? '' : 's'} · ${fmt(sumOf(shelfList))}</small>`; bits.push('every item, with where it came from'); }
   else if (current) { const kids = current.children.filter((c) => c.path && !hiddenPaths.has(c.path)).length, fl = gunkList.filter((c) => !hiddenUnder(c.path)).length; head = `<b>${esc(current.path ? current.name : rootName)}/</b> <small>· ${fmt(current.size)} · the folder in view</small>`; bits.push(`${Math.min(30, kids)} of ${kids} inside`, `${Math.min(25, fl)} of ${fl} flagged by Di`); }
   else head = '<b>nothing yet</b> <small>· map a disk first</small>';
   if (ru.turns.length) bits.push(`last ${Math.min(8, ru.turns.length)} turns`);
@@ -2081,7 +2081,7 @@ function ruPeek() {
 }
 const esc = (x) => String(x).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 { const f = ruEl.querySelector('.focus'), pre = f.querySelector('pre'), more = f.querySelector('.more'); more.onclick = () => { pre.hidden = !pre.hidden; more.textContent = pre.hidden ? 'show what Ru sees' : 'hide'; }; }
-// switcher pills: Selection, the folder, the Vault; the lit one is what Ru is about. Chips for the Selection underneath.
+// switcher pills: Selection, the folder, the Shelf; the lit one is what Ru is about. Chips for the Selection underneath.
 function ruCtxLine() {
   ruReconcile();
   const A = ruAreas(), on = A.filter((x) => x.on);
@@ -2100,12 +2100,12 @@ function ruSuggest() {
   if (ru.turns.length) return;
   const qs = { selection: mode === 'mem' ? ['Why is this process using so much?', 'Is it safe to quit?'] : ru.sel.size > 1 ? ['Validate these: which can really go?', 'Anything here still in use or referenced?'] : ['Validate this: can it really go?', 'What breaks if I delete it?'],
     folder: [current?.path ? `Validate what Di flagged in ${current.name}` : 'Validate what Di flagged: what can really go first?', 'What here looks like it needs a closer look?'],
-    vault: ['Anything in the vault I can purge for good?', 'Should any of these go back?'] }[ru.area] ?? [];
+    shelf: ['Anything on the shelf I can delete for good?', 'Should any of these go back?'] }[ru.area] ?? [];
   for (const q of qs) { const b = document.createElement('button'); b.type = 'button'; b.textContent = q; b.onclick = () => ruAsk(q); el.appendChild(b); }
 }
 async function ruOpen(area) {
   ru.open = true; ruEl.hidden = false; document.body.classList.add('ru-open'); hideMenu(); tip.hidden = true;
-  try { vaultList = await api('/api/vault'); } catch {}
+  try { shelfList = await api('/api/shelf'); } catch {}
   if (area) { ru.area = area; ru.pinned = true; }
   ruCtxLine(); ruSuggest(); ruIn.focus();
 }
@@ -2159,28 +2159,28 @@ async function openSettings() {
   gearEl.showModal();
 }
 $('#gear').onclick = openSettings;
-// ---- reset: forget the list, the chat, hidden folders and remembered state; purge the vault if asked; go home
+// ---- reset: forget the shortlist, the chat, hidden folders and remembered state; empty the shelf if asked; go home
 const resetEl = $('#resetdlg');
 $('#reset').onclick = async () => {
-  hideMenu(); let v = []; try { v = await api('/api/vault'); } catch {}
+  hideMenu(); let v = []; try { v = await api('/api/shelf'); } catch {}
   const snaps = (await api('/api/status').catch(() => ({}))).snapshots?.length ?? 0;
-  resetEl.innerHTML = `<div class="head">Start over</div><div class="sub">Clears your list, Ru's chat, hidden folders and everything DiMe remembers for every scan, then goes home. The AI setting stays.</div>
-    <label class="hot"><input type="checkbox" name="vault"${v.length ? ' checked' : ''}><span><b>Delete the vault for good</b> · ${v.length ? `${v.length} item${v.length === 1 ? '' : 's'} · ${fmt(sumOf(v))}` : 'empty'}<small>Everything moved there is removed from disk. Cannot be undone. Untick to keep it and restore later.</small></span></label>
+  resetEl.innerHTML = `<div class="head">Start over</div><div class="sub">Clears your shortlist, Ru's chat, hidden folders and everything DiMe remembers for every scan, then goes home. The AI setting stays.</div>
+    <label class="hot"><input type="checkbox" name="shelf"${v.length ? ' checked' : ''}><span><b>Empty the shelf for good</b> · ${v.length ? `${v.length} item${v.length === 1 ? '' : 's'} · ${fmt(sumOf(v))}` : 'empty'}<small>Everything on the shelf is removed from disk. Cannot be undone. Untick to keep it and put things back later.</small></span></label>
     <label><input type="checkbox" name="snapshots"><span>Forget last maps<small>${snaps ? `${snaps} saved map${snaps === 1 ? '' : 's'} reopen instantly; without them the next launch rescans.` : 'none saved'}</small></span></label>
     <div class="foot"><button class="btn sm quiet" type="button">Cancel</button><button class="btn sm hot" type="button">Reset</button></div>`;
   resetEl.querySelector('.quiet').onclick = () => resetEl.close();
   resetEl.querySelector('.foot .hot').onclick = async () => {
-    const vault = resetEl.querySelector('[name=vault]').checked, snapshots = resetEl.querySelector('[name=snapshots]').checked;
-    let r; try { r = await api('/api/reset', { vault, snapshots }); } catch (e) { toast(`Reset: ${e.message}`); return; }
+    const shelf = resetEl.querySelector('[name=shelf]').checked, snapshots = resetEl.querySelector('[name=snapshots]').checked;
+    let r; try { r = await api('/api/reset', { shelf, snapshots }); } catch (e) { toast(`Reset: ${e.message}`); return; }
     resetEl.close();
     clearTimeout(stateTimer); stateLoaded = false;
     picked.clear(); hiddenPaths.clear(); openRows.clear(); kidCache.clear(); navHist.length = 0; tiersOn.clear(); for (const t of ['safe', 'likely', 'review']) tiersOn.add(t);
     filter = ''; idleDays = 0; syncFilterButtons();
     ru.turns.length = 0; ru.sel.clear(); ru.pinned = false; ruMsgs.innerHTML = ''; ruEl.querySelector('.clear').hidden = true; ruClose();
-    vaultList = []; try { for (const k of Object.keys(localStorage)) if (k.startsWith('dime.')) localStorage.removeItem(k); } catch {}
+    shelfList = []; try { for (const k of Object.keys(localStorage)) if (k.startsWith('dime.')) localStorage.removeItem(k); } catch {}
     if (snapshots) renderSnaps([]);
     renderPickBar(); showLanding();
-    toast(vault && r.purged ? `Di: reset · ${r.purged} vault item${r.purged === 1 ? '' : 's'} deleted for good` : 'Di: reset', 'du');
+    toast(shelf && r.purged ? `Di: reset · ${r.purged} shelved item${r.purged === 1 ? '' : 's'} deleted for good` : 'Di: reset', 'du');
   };
   resetEl.showModal();
 };
@@ -2247,17 +2247,27 @@ function verdictRows(paths) {
   }
   return [rows, outside];
 }
+// Ru answers with {go, keep}. It never picks a destination: "go" only puts things on the shortlist,
+// "keep" takes them back off it when Di put them there. Older replies split go into archive/delete.
+const goPaths = (v) => [...new Set([...(v.go ?? []), ...(v.archive ?? []), ...(v.delete ?? [])])];
 function renderVerdict(m, v) {
   const box = document.createElement('div'); box.className = 'verdict';
-  const groups = [['delete', 'Delete', 'hot'], ['archive', 'Move to vault', 'ru'], ['keep', 'Keep', 'quiet']].filter(([k]) => v[k]?.length);
+  const groups = [['Can go', 'ru', goPaths(v)], ['Keep', 'quiet', v.keep ?? []]].filter(([, , paths]) => paths.length);
   if (!groups.length) return;
-  for (const [k, label, cls] of groups) { const g = document.createElement('div'); g.className = `vg ${cls}`; g.innerHTML = `<b></b><ul></ul>`; g.querySelector('b').textContent = `${label} · ${v[k].length}`; for (const p of v[k]) { const li = document.createElement('li'); li.textContent = tilde(p); g.querySelector('ul').appendChild(li); } box.appendChild(g); }
+  for (const [label, cls, paths] of groups) { const g = document.createElement('div'); g.className = `vg ${cls}`; g.innerHTML = `<b></b><ul></ul>`; g.querySelector('b').textContent = `${label} · ${paths.length}`; for (const p of paths) { const li = document.createElement('li'); li.textContent = tilde(p); g.querySelector('ul').appendChild(li); } box.appendChild(g); }
   const acts = document.createElement('div'); acts.className = 'acts'; box.appendChild(acts);
   const mk = (label, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = `btn sm ${cls}`; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
-  const go = [...(v.archive ?? []), ...(v.delete ?? [])], [goRows, outside] = verdictRows(go);
-  if (goRows.length) mk(`Add ${goRows.length} to list`, 'ru', () => { // Ru only nominates; the list is where you decide
-    for (const r of goRows) if (!picked.has(r.key)) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: v.delete?.some((p) => relOf(p) === r.key) ? 'likely' : 'review', reason: 'ru', what: 'Ru said it can go', note: v.delete?.some((p) => relOf(p) === r.key) ? 'Ru: delete.' : 'Ru: move to the vault.', age_days: 0 });
-    if (current) renderCleanup(); toast(`Di: ${goRows.length} added to your list`, 'du'); listDialog([...picked.values()].map(candRow));
+  const [goRows, outside] = verdictRows(goPaths(v));
+  if (goRows.length) mk(`Add ${goRows.length} to shortlist`, 'ru', () => {
+    for (const r of goRows) if (!picked.has(r.key)) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: 'review', reason: 'ru', what: 'Ru said it can go', note: 'Ru checked this one.', age_days: 0 });
+    if (current) renderCleanup(); toast(`Di: ${goRows.length} added to your shortlist`, 'du'); listDialog([...picked.values()].map(candRow));
+  });
+  // Ru can also undo Di: anything it says to keep comes straight back off the shortlist
+  const [keepRows] = verdictRows(v.keep), onList = keepRows.filter((r) => picked.has(r.key));
+  if (onList.length) mk(`Take ${onList.length} off the shortlist`, 'quiet', () => {
+    for (const r of onList) picked.delete(r.key);
+    if (current) renderCleanup(); else renderPickBar();
+    toast(`Di: ${onList.length} taken off your shortlist`, 'du');
   });
   if (outside.length) { const o = document.createElement('div'); o.className = 'note'; o.textContent = `${outside.length} path${outside.length === 1 ? ' is' : 's are'} outside the scan root and cannot be acted on here.`; box.appendChild(o); }
   m.appendChild(box);
@@ -2267,7 +2277,7 @@ async function ruAsk(q) {
   ru.busy = true; ruIn.value = ''; ruIn.style.height = 'auto';
   ru.abort = new AbortController(); ruSend.classList.add('stop'); ruSend.innerHTML = '<i></i>'; ruSend.title = 'Stop';
   ruAdd('me', q); ruSuggest();
-  try { vaultList = await api('/api/vault'); } catch {}
+  try { shelfList = await api('/api/shelf'); } catch {}
   ruCtxLine();
   const about = ruEl.querySelector('.focus .fs b')?.textContent ?? ruAreas().find((x) => x.id === ru.area)?.label ?? '', sentCtx = ruContext();
   const transcript = ru.turns.slice(-8).map((t) => `${t.who === 'me' ? 'User' : 'Ru'}: ${t.text}`).join('\n\n');
