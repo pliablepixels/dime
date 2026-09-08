@@ -573,6 +573,14 @@
   @media (max-width: 860px) { #ru, #ru-fab { right: 16px; bottom: calc(42vh + 24px); } #ru { width: calc(100vw - 32px); max-height: 50vh; } }
   #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-weight: 600; }
   #toast[hidden] { display: none; }
+  #prog { position: fixed; z-index: 30; bottom: 24px; left: 50%; transform: translateX(-50%); width: min(420px, 86vw); padding: 12px 16px 14px;
+    background: var(--panel); backdrop-filter: blur(14px); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,.5); }
+  #prog[hidden] { display: none; }
+  #prog .pl { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  #prog .track { height: 6px; border-radius: 3px; background: rgba(232,230,223,.12); overflow: hidden; }
+  #prog .track i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--blue); transition: width .2s ease; }
+  #prog.wait .track i { width: 35%; animation: progslide 1.1s ease-in-out infinite; }
+  @keyframes progslide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
 
   @media (max-width: 860px) {
     #panel { top: auto; height: 42vh; width: auto; left: 16px; }
@@ -693,6 +701,7 @@
     <div id="olegend"><span>distance from the core = load</span><span>idle <i></i> busy</span><span>size = memory</span><span>trail = recent movement</span><span>ring = odd behaviour</span><span>lines tie helpers to their app</span></div>
   </div>
   <div id="reveal"><div class="big"></div><div class="sub"></div></div>
+  <div id="prog" hidden><div class="pl"></div><div class="track"><i></i></div></div>
   <button id="reset" type="button" title="Reset · clear your shortlist, Ru's chat, remembered state and the shelf, then go home">Reset</button>
   <dialog id="resetdlg"></dialog>
   <button id="gear" type="button" title="Settings · which AI Ru thinks with" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></button>

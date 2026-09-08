@@ -1075,9 +1075,33 @@ async function openShelf() {
   if (rows.length) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sm ru'; b.textContent = '✦ Ask Ru'; b.style.marginRight = 'auto'; b.onclick = () => { dlg.close(); ruOpen('shelf'); }; dlg.querySelector('.foot').prepend(b); }
 }
 const nestedIn = (p, keys) => keys.some((k) => k !== p && (k === '' || p.startsWith(k + '/')));
+// One move at a time, with something on screen while it runs: without it a slow shelve looks like
+// nothing happened, and the obvious response is to click it again.
+let acting = false;
+function progress(text) {
+  const el = $('#prog');
+  if (text === null) { el.hidden = true; el.classList.remove('wait'); return; }
+  el.querySelector('.pl').textContent = text;
+  el.hidden = false;
+}
+async function withProgress(verb, run) {
+  const el = $('#prog'), fill = el.querySelector('.track i');
+  progress(`${verb}…`); el.classList.add('wait');
+  const poll = setInterval(async () => {
+    let s; try { s = await api('/api/status'); } catch { return; }
+    const j = s.job;
+    if (!j || !j.total) return;
+    el.classList.remove('wait');
+    fill.style.width = `${Math.round((j.done / j.total) * 100)}%`;
+    progress(`${verb} ${j.done} of ${j.total}`);
+  }, 250);
+  try { return await run(); } finally { clearInterval(poll); fill.style.width = ''; progress(null); }
+}
 async function act(url, body, verb) {
+  if (acting) { toast('Di: still working on the last one', 'du'); return; }
   if (body.paths) { const keys = [...new Set(body.paths)]; body.paths = keys.filter((p) => !nestedIn(p, keys)); } // a folder takes what is inside it; sending the child too would only fail
-  let res; try { res = await api(url, body); } catch (e) { toast(`Di: ${e.message}`, 'du'); return; }
+  acting = true;
+  let res; try { res = await withProgress(verb === 'deleted' ? 'Deleting' : verb === 'put back' ? 'Putting back' : 'Shelving', () => api(url, body)); } catch (e) { toast(`Di: ${e.message}`, 'du'); return; } finally { acting = false; }
   const ok = res.filter((r) => r.ok), bad = res.filter((r) => !r.ok);
   for (const [p] of picked) if (ok.some((r) => p === r.key || p.startsWith(r.key + '/'))) picked.delete(p); // the item and anything ticked inside it
   for (const p of [...ru.sel.keys()]) if (ok.some((r) => p === r.key || p.startsWith(r.key + '/'))) ru.sel.delete(p);

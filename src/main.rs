@@ -39,6 +39,20 @@ struct App {
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
     /// Ru's brain, picked from the gear setting and what the machine has; swapped live from the gear menu.
     ru: Mutex<ru::Ru>,
+    /// The shelve or delete running right now, as (verb, done, total), so the UI can show it moving.
+    job: Mutex<Option<(String, u64, u64)>>,
+}
+
+fn job_start(app: &App, verb: &str, total: usize) {
+    *app.job.lock().unwrap() = Some((verb.into(), 0, total as u64));
+}
+fn job_tick(app: &App) {
+    if let Some(j) = app.job.lock().unwrap().as_mut() {
+        j.1 += 1;
+    }
+}
+fn job_end(app: &App) {
+    *app.job.lock().unwrap() = None;
 }
 type Shared = Arc<App>;
 type ApiErr = (StatusCode, String);
@@ -121,6 +135,7 @@ async fn serve() -> String {
         pending: Mutex::new(HashSet::new()),
         watcher: Mutex::new(None),
         ru: Mutex::new(ru::detect(&ru::load_settings())),
+        job: Mutex::new(None),
     });
     // Apply queued filesystem changes once a second, coalesced.
     let app_bg = app.clone();
@@ -344,6 +359,7 @@ async fn status(State(app): State<Shared>) -> Json<serde_json::Value> {
     };
     Json(serde_json::json!({
         "state": state, "root": root, "files": files, "size": size, "live": live, "as_of": as_of, "snapshots": snapshots, "ru": ru_label, "denied": denied, "fda": scan::full_disk_access(),
+        "job": app.job.lock().unwrap().as_ref().map(|(verb, done, total)| serde_json::json!({ "verb": verb, "done": done, "total": total })),
         "version": app.version.load(Ordering::Relaxed),
     }))
 }
@@ -617,7 +633,9 @@ struct Outcome {
 }
 
 /// Resolve a path for a destructive action: inside the root, not the root itself, not holding the shelf.
-fn target(app: &App, rel: &str) -> Result<(String, PathBuf, u64, String), ApiErr> {
+/// `cands` is passed in rather than looked up here: moving things makes the watcher bump the tree
+/// version, so fetching it per item would rebuild the whole candidate list several times a batch.
+fn target(app: &App, rel: &str, cands: &[gunk::Candidate]) -> Result<(String, PathBuf, u64, String), ApiErr> {
     let (rel, abs) = resolve(app, rel)?;
     let is_root = with_tree(app, |root, _| Ok(abs == root))?;
     if rel.is_empty() || is_root {
@@ -627,7 +645,7 @@ fn target(app: &App, rel: &str) -> Result<(String, PathBuf, u64, String), ApiErr
         return Err(bad("that holds the shelf"));
     }
     let size = with_tree(app, |_, t| Ok(scan::get(t, &rel).map(|n| n.size).unwrap_or(0)))?;
-    let note = candidates(app)?.iter().find(|c| c.path == rel).map(|c| format!("{} · {}", c.what, c.note)).unwrap_or_default();
+    let note = cands.iter().find(|c| c.path == rel).map(|c| format!("{} · {}", c.what, c.note)).unwrap_or_default();
     Ok((rel, abs, size, note))
 }
 
@@ -651,8 +669,10 @@ async fn shelf_add(State(app): State<Shared>, Json(req): Json<PathsReq>) -> Json
         let mut out = vec![];
         let mut moved = vec![];
         let idle = req.idle.map(cutoff_for);
+        let cands = candidates(&app).unwrap_or_else(|_| std::sync::Arc::new(vec![])); // once, not once per item
+        job_start(&app, "shelved", req.paths.len());
         for key in req.paths {
-            let r = target(&app, &key).map_err(|e| e.1).and_then(|(rel, abs, size, note)| match idle {
+            let r = target(&app, &key, &cands).map_err(|e| e.1).and_then(|(rel, abs, size, note)| match idle {
                 Some(cut) if abs.is_dir() => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, bytes)| shelf::shelve_partial(&abs, &files, bytes, format!("{note} · only files idle at the time")).map(|_| files.iter().map(|f| abs.join(f)).collect::<Vec<_>>()).map_err(|e| e.to_string())),
                 Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| if files.is_empty() { Err("not idle that long".into()) } else { shelf::shelve(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()) }),
                 None => shelf::shelve(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()),
@@ -661,7 +681,9 @@ async fn shelf_add(State(app): State<Shared>, Json(req): Json<PathsReq>) -> Json
                 Ok(paths) => { moved.extend(paths); out.push(Outcome { key, ok: true, error: None }) }
                 Err(e) => out.push(Outcome { key, ok: false, error: Some(e) }),
             }
+            job_tick(&app);
         }
+        job_end(&app);
         touched(&app, &moved);
         Json(out)
     })
@@ -674,8 +696,10 @@ async fn delete_paths(State(app): State<Shared>, Json(req): Json<PathsReq>) -> J
         let mut out = vec![];
         let mut gone = vec![];
         let idle = req.idle.map(cutoff_for);
+        let cands = candidates(&app).unwrap_or_else(|_| std::sync::Arc::new(vec![])); // once, not once per item
+        job_start(&app, "deleted", req.paths.len());
         for key in req.paths {
-            let r = target(&app, &key).map_err(|e| e.1).and_then(|(rel, abs, ..)| match idle {
+            let r = target(&app, &key, &cands).map_err(|e| e.1).and_then(|(rel, abs, ..)| match idle {
                 Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| {
                     if files.is_empty() { return Err("not idle that long".into()); }
                     let mut done = vec![];
@@ -688,7 +712,9 @@ async fn delete_paths(State(app): State<Shared>, Json(req): Json<PathsReq>) -> J
                 Ok(paths) => { gone.extend(paths); out.push(Outcome { key, ok: true, error: None }) }
                 Err(e) => out.push(Outcome { key, ok: false, error: Some(e) }),
             }
+            job_tick(&app);
         }
+        job_end(&app);
         touched(&app, &gone);
         Json(out)
     })
