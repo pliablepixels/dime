@@ -10,6 +10,18 @@ Di digs through your disk. Me watches your memory. Ru says what can go. Three ex
 
 macOS only (it leans on FSEvents, nettop, lsof and IOKit). Apple silicon or Intel.
 
+**Download**: grab `dime-<version>-macos.tar.gz` from [Releases](https://github.com/pliablepixels/dime/releases), then
+
+```
+tar xzf dime-*-macos.tar.gz && cd dime-*
+xattr -d com.apple.quarantine dime   # unsigned binary; or right-click > Open the first time
+./dime
+```
+
+One binary runs on Apple silicon and Intel. Skip to step 3 for Ru.
+
+**Or build from source**:
+
 1. **Rust** 1.85 or newer, if you do not have it:
    ```
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -30,7 +42,7 @@ macOS only (it leans on FSEvents, nettop, lsof and IOKit). Apple silicon or Inte
 ## Run
 
 ```
-./target/release/dime
+./target/release/dime        # or ./dime from the download
 ```
 
 Opens http://127.0.0.1:4242 in your browser. `DIME_PORT=5000 ./target/release/dime` to use another port. The startup line lists anything optional it could not find.

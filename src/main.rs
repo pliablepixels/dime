@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use sysinfo::Disks;
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 enum ScanState {
     Idle,
@@ -111,7 +111,7 @@ async fn main() {
         .route("/api/ask", post(ask))
         .route("/api/ru", get(ru_get).post(ru_set))
         .route("/api/reset", post(reset))
-        .fallback_service(ServeDir::new("static"))
+        .fallback(static_file)
         // static files change while developing; make every reload re-check them
         .layer(SetResponseHeaderLayer::overriding(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache")))
         .with_state(app.clone());
@@ -126,6 +126,18 @@ async fn main() {
     if !have("jq") { println!("  note: `jq` not found on PATH; Ru uses it to trim Di's JSON. `brew install jq`."); }
     let _ = std::process::Command::new("open").arg(format!("http://{addr}")).spawn();
     axum::serve(listener, router).await.unwrap();
+}
+
+/// The UI is built into the binary. While developing, a `static/` folder in the working directory wins, so edit-and-refresh keeps working.
+async fn static_file(uri: axum::http::Uri) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (name, mime, built_in) = match uri.path() {
+        "/" | "/index.html" => ("index.html", "text/html; charset=utf-8", include_str!("../static/index.html")),
+        "/app.js" => ("app.js", "text/javascript; charset=utf-8", include_str!("../static/app.js")),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let body = std::fs::read_to_string(PathBuf::from("static").join(name)).unwrap_or_else(|_| built_in.to_string());
+    ([(axum::http::header::CONTENT_TYPE, mime)], body).into_response()
 }
 
 async fn home() -> Json<serde_json::Value> {
