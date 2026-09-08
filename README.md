@@ -52,7 +52,7 @@ open /Applications/DiMe.app  # or just double-click it
 
 The app runs in its own window. From a shell the binary opens http://127.0.0.1:4242 in your browser instead; add `--window` for the app window, or `--browser` inside the bundle to force the browser. `DIME_PORT=5000` picks another port. The startup line lists anything optional it could not find.
 
-**Full Disk Access.** To scan folders macOS protects (Mail, Messages, Safari data, other users), grant it in System Settings → Privacy & Security → Full Disk Access: add `DiMe.app`, or your terminal app if you run the binary from a shell. Without it those folders simply show smaller.
+**Full Disk Access.** To scan folders macOS protects (Mail, Messages, Safari data, other users), grant it in System Settings → Privacy & Security → Full Disk Access: add `DiMe.app`, or your terminal app if you run the binary from a shell, then start DiMe again. Without it those folders simply show smaller, and Di says so in a banner once the scan finishes.
 
 DiMe keeps its own files in `~/.dime`: the vault (`vault/`), remembered per-root state (`state.json`), the last map of each root (`snapshots/`) and Ru's read-only helper (`bin/di`). Delete the folder to reset everything except what is in the vault, which you should restore or purge from the app first.
 

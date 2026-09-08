@@ -64,6 +64,14 @@ impl Progress {
     }
 }
 
+/// Directories the scan could not open because macOS refused. Reset at the start of every scan and
+/// read once it finishes, so DiMe can say that Full Disk Access would show more. One scan at a time,
+/// so a single counter is enough.
+static DENIED: AtomicU64 = AtomicU64::new(0);
+pub fn denied() -> u64 {
+    DENIED.load(Ordering::Relaxed)
+}
+
 /// Folders a scan never enters: system mounts under "/", and DiMe's own vault (moving something there must not just move it on the map).
 pub fn skip_list(root: &Path) -> Vec<PathBuf> {
     let mut skip: Vec<PathBuf> = if root == Path::new("/") { ["/dev", "/Volumes", "/System/Volumes", "/private/var/vm", "/proc"].iter().map(PathBuf::from).collect() } else { vec![] };
@@ -73,6 +81,7 @@ pub fn skip_list(root: &Path) -> Vec<PathBuf> {
     skip
 }
 pub fn scan(root: &Path, progress: &Progress) -> Node {
+    DENIED.store(0, Ordering::Relaxed);
     let skip = skip_list(root);
     let own = fs::symlink_metadata(root).ok();
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
@@ -243,7 +252,13 @@ fn scan_dir_slow(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[A
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
     let entries: Vec<fs::DirEntry> = match fs::read_dir(path) {
         Ok(rd) => rd.filter_map(Result::ok).collect(),
-        Err(_) => vec![],
+        Err(e) => {
+            // the bulk walk falls back to this one, so every refused directory is counted exactly here
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                DENIED.fetch_add(1, Ordering::Relaxed);
+            }
+            vec![]
+        }
     };
     let mut children: Vec<Node> = entries
         .into_par_iter()

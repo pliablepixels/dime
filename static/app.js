@@ -1170,7 +1170,7 @@ function showLanding() {
   history.replaceState(null, '', location.pathname);
   // main menu: just the two cards; Disk goes back to the map if one exists, else expands its setup below
   for (const x of $('#modes').children) x.setAttribute('aria-pressed', 'false');
-  $('#disk-setup').hidden = true;
+  $('#disk-setup').hidden = true; $('#denied').hidden = true;
   $('.mode .alt').hidden = !scanDone;
   $('.mode.du b').textContent = scanDone ? `Back to ${rootName}` : 'Dig through the drive';
   if (!scanDone) api('/api/status').then((s) => renderSnaps(s.snapshots)).catch(() => {});
@@ -1256,11 +1256,12 @@ async function watchScan() {
   }
 }
 async function finishScan() {
-  scanning = false; delete document.body.dataset.scanning; scanDone = true; version = null; views.clear(); mapAsOf = null;
+  scanning = false; delete document.body.dataset.scanning; scanDone = true; version = null; views.clear(); mapAsOf = null; deniedShown = false;
   await loadState();
   if (mode !== 'disk') { rootSize = (await api('/api/status')).size || 1; await loadDrive(); return; } // finished while Me was up; the map waits until you come back $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
   const st = await api('/api/status');
   rootSize = st.size || 1;
+  denyBanner(st.denied);
   await loadDrive();
   await navigate('', pendingHighlight ? { highlight: pendingHighlight } : {}); // same keys as the stacks: they slide into their treemap places
   pendingHighlight = null;
@@ -1300,13 +1301,23 @@ async function startScan(path) {
 $('#scanform').onsubmit = (e) => { e.preventDefault(); startScan($('#path').value); };
 // page reload: pick up a scan already running or finished on the server
 let mapAsOf = null; // epoch seconds when the map came from a snapshot, null after a fresh scan
+// macOS refused some folders, so the map is smaller than the disk. Full Disk Access is the one fix; say so once per scan.
+let deniedShown = false;
+function denyBanner(n) {
+  const el = $('#denied');
+  if (!n || deniedShown) { el.hidden = true; return; }
+  el.innerHTML = `<span><b>${fmtN(n)} folder${n === 1 ? '' : 's'} would not open.</b> That much of this drive is missing from the map.</span><button type="button">Give DiMe access</button><button class="x" type="button" title="Dismiss">Dismiss</button>`;
+  el.querySelector('button').onclick = () => { api('/api/fda', {}).catch((e) => toast(e.message)); toast('Di: add DiMe to the list, then start it again', 'du'); };
+  el.querySelector('.x').onclick = () => { deniedShown = true; el.hidden = true; };
+  el.hidden = false;
+}
 const ago = (t) => { const s = Date.now() / 1000 - t; return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
 /** The page picked up a map the server already holds: a scan in progress, a finished one, or one just resumed from a snapshot. */
 async function enterMap(s) {
   beginScanUi(s.root);
   if (s.state === 'scanning') await watchScan();
   scanning = false; delete document.body.dataset.scanning; scanDone = true; flyHome = false; $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
-  const st = await api('/api/status'); rootSize = st.size || 1; mapAsOf = st.as_of ?? null;
+  const st = await api('/api/status'); rootSize = st.size || 1; mapAsOf = st.as_of ?? null; denyBanner(st.denied);
   await loadDrive(); await loadState();
   const sel = new URLSearchParams(location.search).get('sel'); // deep link: ?sel=<rel path> highlights an item
   await navigate(location.hash.slice(1) || '', sel ? { highlight: sel } : {});

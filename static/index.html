@@ -170,6 +170,12 @@
   #hid { pointer-events: auto; margin-left: 10px; vertical-align: 1px; background: rgba(232,230,223,.06); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 11px; color: var(--ink-2); }
   #hid:hover { color: var(--ink); border-color: rgba(232,230,223,.25); }
   #stats .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--teal); margin-left: 8px; vertical-align: 1px; box-shadow: 0 0 6px var(--teal); }
+  #denied { pointer-events: auto; display: flex; align-items: baseline; gap: 10px; max-width: 520px; padding: 8px 12px; border-radius: 8px;
+    background: rgba(255,122,61,.10); border: 1px solid rgba(255,122,61,.38); font-size: 12.5px; color: var(--ink-2); }
+  #denied b { color: var(--hot); font-weight: 700; }
+  #denied button { background: none; border: 0; padding: 0; font-size: 12.5px; font-weight: 700; color: var(--hot); white-space: nowrap; }
+  #denied button:hover { text-decoration: underline; }
+  #denied .x { color: var(--ink-3); font-weight: 600; margin-left: auto; }
   #disk { width: 300px; pointer-events: none; font-size: 12px; color: var(--ink-2); }
   #disk .cap { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: rgba(232,230,223,.08); margin-bottom: 5px; }
   #disk .cap i { display: block; height: 100%; }
@@ -618,6 +624,7 @@
     <nav id="crumbs" aria-label="Location"></nav>
     <div id="idlemark" hidden></div>
     <div id="stats"></div>
+    <div id="denied" hidden></div>
     <div id="disk" hidden></div>
     </div>
     <div id="duui">

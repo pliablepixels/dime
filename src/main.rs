@@ -25,7 +25,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 enum ScanState {
     Idle,
     Scanning(PathBuf, Arc<scan::Progress>),
-    Done { root: PathBuf, tree: scan::Node, as_of: Option<i64> }, // as_of: set when the tree came from a snapshot rather than a fresh scan
+    Done { root: PathBuf, tree: scan::Node, as_of: Option<i64>, denied: u64 }, // as_of: set when the tree came from a snapshot rather than a fresh scan
 }
 
 struct App {
@@ -158,6 +158,7 @@ async fn serve() -> String {
         .route("/api/ask", post(ask))
         .route("/api/ru", get(ru_get).post(ru_set))
         .route("/api/reset", post(reset))
+        .route("/api/fda", post(full_disk_access))
         .fallback(static_file)
         // static files change while developing; make every reload re-check them
         .layer(SetResponseHeaderLayer::overriding(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache")))
@@ -273,7 +274,7 @@ async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Resu
         println!("  scanned {} files, {:.1} GB in {:.1}s; snapshot in {:.1}s", tree.files, tree.size as f64 / 1e9, scanned.as_secs_f64(), t1.elapsed().as_secs_f64());
         *app2.watcher.lock().unwrap() = watch(&app2, &root);
         app2.pending.lock().unwrap().clear();
-        *app2.scan.lock().unwrap() = ScanState::Done { root, tree, as_of: None };
+        *app2.scan.lock().unwrap() = ScanState::Done { root, tree, as_of: None, denied: scan::denied() };
         app2.version.fetch_add(1, Ordering::Relaxed);
     });
     Ok(StatusCode::ACCEPTED)
@@ -311,6 +312,7 @@ async fn status(State(app): State<Shared>) -> Json<serde_json::Value> {
     };
     let ru_label = { let r = app.ru.lock().unwrap(); if matches!(r.provider, ru::Provider::None) { serde_json::Value::Null } else { serde_json::Value::String(r.label.clone()) } };
     let as_of = match &*s { ScanState::Done { as_of, .. } => *as_of, _ => None };
+    let denied = match &*s { ScanState::Done { denied, .. } => *denied, _ => 0 };
     let snapshots = snapshot::list(); // always listed; the landing shows them only while idle, the reset dialog needs them from a live map too
     let (files, size, live) = match &*s {
         ScanState::Scanning(_, p) => {
@@ -336,7 +338,7 @@ async fn status(State(app): State<Shared>) -> Json<serde_json::Value> {
         _ => (0, 0, None),
     };
     Json(serde_json::json!({
-        "state": state, "root": root, "files": files, "size": size, "live": live, "as_of": as_of, "snapshots": snapshots, "ru": ru_label,
+        "state": state, "root": root, "files": files, "size": size, "live": live, "as_of": as_of, "snapshots": snapshots, "ru": ru_label, "denied": denied,
         "version": app.version.load(Ordering::Relaxed),
     }))
 }
@@ -548,6 +550,17 @@ async fn reveal(Json(req): Json<PathReq>) -> Result<StatusCode, ApiErr> {
 }
 
 /// Open a folder in Finder, or reveal a file in its folder.
+/// Show the Full Disk Access list in System Settings. Nothing can grant it programmatically: the user
+/// has to add DiMe (or their terminal) themselves, then launch it again. The pane id is the old
+/// preference-pane one, which macOS still maps for compatibility; a miss lands on Privacy & Security.
+async fn full_disk_access() -> Result<StatusCode, ApiErr> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .spawn()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn open_path(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<StatusCode, ApiErr> {
     let (_, abs) = resolve(&app, &req.path)?;
     let mut cmd = std::process::Command::new("open");
@@ -771,7 +784,7 @@ async fn resume(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<J
         let (meta, tree) = snapshot::load(&root).map_err(|e| bad(format!("no snapshot for {}: {e}", root.display())))?;
         *app2.watcher.lock().unwrap() = watch(&app2, &root);
         app2.pending.lock().unwrap().clear();
-        *app2.scan.lock().unwrap() = ScanState::Done { root, tree, as_of: Some(meta.at) };
+        *app2.scan.lock().unwrap() = ScanState::Done { root, tree, as_of: Some(meta.at), denied: 0 };
         app2.version.fetch_add(1, Ordering::Relaxed);
         Ok(Json(meta))
     })
