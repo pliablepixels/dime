@@ -2524,7 +2524,30 @@ function ruSuggest() {
   const q = 'Validate this can be deleted';
   const b = document.createElement('button'); b.type = 'button'; b.textContent = q; b.onclick = () => ruAsk(q); el.appendChild(b);
 }
+// Ru is summoned out of the Ask Ru button and returns to it: a thread of motes bowed between the
+// two, each one arriving a beat after the last so it reads as something drawn through the air.
+function ruWisp(a, b) {
+  if (REDUCED || !a || !b || !a.width || !b.width) return;
+  const host = document.createElement('div'); host.className = 'wisp'; document.body.appendChild(host);
+  const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2, x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
+  const dist = Math.hypot(x1 - x0, y1 - y0) || 1, ux = -(y1 - y0) / dist, uy = (x1 - x0) / dist; // unit normal, for the bow
+  const N = 16, STEP = 26, DUR = 820;
+  for (let i = 0; i < N; i++) {
+    const d = document.createElement('i'); host.appendChild(d);
+    const bow = (0.12 + Math.random() * 0.16) * (i % 2 ? 1 : -1);
+    const mx = (x0 + x1) / 2 + ux * dist * bow + (Math.random() - 0.5) * 20;
+    const my = (y0 + y1) / 2 + uy * dist * bow + (Math.random() - 0.5) * 20;
+    d.animate([
+      { transform: `translate(${x0}px, ${y0}px) scale(.3)`, opacity: 0 },
+      { transform: `translate(${mx}px, ${my}px) scale(1)`, opacity: 0.85, offset: 0.42 },
+      { transform: `translate(${x1}px, ${y1}px) scale(.22)`, opacity: 0 },
+    ], { duration: DUR + Math.random() * 240, delay: i * STEP, easing: 'cubic-bezier(.25,.7,.3,1)' });
+  }
+  setTimeout(() => host.remove(), DUR + N * STEP + 500);
+}
 async function ruOpen(area) {
+  const fab = $('#ru-fab').getBoundingClientRect(); // read before the panel opens and hides it
+  requestAnimationFrame(() => ruWisp(fab, ruEl.getBoundingClientRect()));
   // summoned: it comes in from off to one side so the wisp has somewhere to come from
   const fresh = !guru.g;
   ruShow(true);
@@ -2543,7 +2566,11 @@ async function ruOpen(area) {
     rz.onpointermove = (ev) => { w = Math.round(Math.min(Math.max(320, r.right - ev.clientX), innerWidth - 40)); h = Math.round(Math.min(Math.max(260, r.bottom - ev.clientY), innerHeight - 40)); ruEl.style.width = `${w}px`; ruEl.style.height = `${h}px`; };
     rz.onpointerup = () => { rz.onpointermove = rz.onpointerup = null; try { localStorage.setItem('dime.ru', JSON.stringify({ w, h })); } catch {} };
   }; }
-function ruClose() { ru.open = false; ruEl.hidden = true; document.body.classList.remove('ru-open'); }
+function ruClose() {
+  const from = ruEl.getBoundingClientRect(); // read before it is hidden
+  ru.open = false; ruEl.hidden = true; document.body.classList.remove('ru-open');
+  requestAnimationFrame(() => ruWisp(from, $('#ru-fab').getBoundingClientRect())); // and it goes back the way it came
+}
 const NO_RU = 'Ru has no AI to think with. Install the Claude Code CLI or Codex and log in once, run Ollama, or pick an endpoint in the gear menu.';
 function applyRu(label) {
   ru.label = label; document.body.classList.toggle('no-ru', !label);

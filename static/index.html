@@ -514,6 +514,11 @@
   #ru .chip b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; } #ru .chip small { color: var(--ink-3); }
   #ru .chip.map { border-style: dashed; }
   #ru .chip button { background: none; border: 0; color: var(--ink-3); padding: 0 4px; font-size: 13px; border-radius: 999px; } #ru .chip button:hover { color: var(--hot); }
+  /* the wisp between the Ask Ru button and Ru's panel */
+  .wisp { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
+  .wisp i { position: absolute; left: 0; top: 0; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 50%; opacity: 0;
+    background: radial-gradient(circle, rgba(240,234,255,.95), rgba(201,179,255,.55) 45%, transparent 70%); filter: blur(1.2px); will-change: transform, opacity; }
+  @media (prefers-reduced-motion: reduce) { .wisp { display: none; } }
   #ru.drop, #ru-fab.drop { outline: 2px dashed var(--ru); outline-offset: 4px; box-shadow: 0 0 40px rgba(201,179,255,.35); }
   body.carrying #ru-fab { display: inline-flex !important; }
   body.carrying #ru-fab, body.carrying #ru { animation: rucall 1.2s ease-in-out infinite; }
