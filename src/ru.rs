@@ -152,7 +152,10 @@ async fn finish(w: &mut DuplexStream, r: std::io::Result<Option<String>>) {
 
 async fn claude(w: &mut DuplexStream, label: &str, system: String, prompt: String, root: PathBuf, path_env: String) -> std::io::Result<Option<String>> {
     emit(w, serde_json::json!({ "t": "provider", "d": label })).await?;
-    let mut cmd = tokio::process::Command::new("claude");
+    // resolved to an absolute path first: handing Command a bare name leaves it looking on a PATH
+    // that is not the one we give the child, which is how a GUI launch ends up at "no such file"
+    let exe = found_at("claude").unwrap_or_else(|| "claude".into());
+    let mut cmd = tokio::process::Command::new(&exe);
     cmd.env("PATH", path_env)
         // --bare would also drop the login, so isolate piecemeal: no user settings or hooks, no MCP servers
         .args(["-p", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--max-turns", "24"])
@@ -209,7 +212,10 @@ async fn codex(w: &mut DuplexStream, label: &str, system: String, prompt: String
     // Seatbelt sandbox: writes only inside an empty scratch folder, reads everywhere, network on so `di` can reach Di's index
     let scratch = crate::shelf::dir().parent().unwrap().join("ru-scratch");
     std::fs::create_dir_all(&scratch)?;
-    let mut cmd = tokio::process::Command::new("codex");
+    // resolved to an absolute path first: handing Command a bare name leaves it looking on a PATH
+    // that is not the one we give the child, which is how a GUI launch ends up at "no such file"
+    let exe = found_at("codex").unwrap_or_else(|| "codex".into());
+    let mut cmd = tokio::process::Command::new(&exe);
     cmd.env("PATH", path_env)
         .args(["exec", "--json", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "--skip-git-repo-check", "-C"]).arg(&scratch).arg("-")
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
