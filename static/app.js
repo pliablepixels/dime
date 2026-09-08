@@ -2290,8 +2290,8 @@ function renderVerdict(m, v) {
   // leaves it. Only the items that would actually change are counted, so the button is never a no-op.
   const [goRows, outside] = verdictRows(goPaths(v)), [keepRows] = verdictRows(v.keep);
   const add = goRows.filter((r) => !picked.has(r.key)), drop = keepRows.filter((r) => picked.has(r.key));
-  const label = add.length && drop.length ? `Modify shortlist · add ${add.length}, drop ${drop.length}`
-    : add.length ? `Add ${add.length} to shortlist` : `Take ${drop.length} off the shortlist`;
+  // always the same action, whichever way the verdict happens to fall: apply what Ru decided
+  const label = `Modify shortlist · ${[add.length && `add ${add.length}`, drop.length && `drop ${drop.length}`].filter(Boolean).join(', ')}`;
   if (add.length || drop.length) mk(label, 'ru', () => {
     for (const r of add) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: 'review', reason: 'ru', what: 'Ru said it can go', note: 'Ru checked this one.', age_days: 0 });
     for (const r of drop) picked.delete(r.key);
