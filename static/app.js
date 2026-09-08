@@ -1143,7 +1143,7 @@ function renderFocus() {
   ruSync();
 }
 
-// ---------- remembered per scan root: hidden folders, tiers, colour, filter, ticks, Ru's chat. Lives in ~/.dime/state.json ----------
+// ---------- remembered per scan root: hidden folders, tiers, colour, filter, ticks. Lives in ~/.dime/state.json ----------
 let stateTimer = null, stateLoaded = false;
 function saveState() {
   if (!stateLoaded) return;
@@ -1151,7 +1151,7 @@ function saveState() {
   stateTimer = setTimeout(() => api('/api/state', { root: rootPath || '/', state: {
     hidden: [...hiddenPaths.values()].map((n) => ({ path: n.path, name: n.name, size: n.size })), tiers: [...tiersOn], color: colorMode, filter, idleDays,
     picked: [...picked.values()].map((c) => ({ path: c.path, name: c.name, size: c.size, is_dir: c.is_dir, tier: c.tier, reason: c.reason, what: c.what, note: c.note, age_days: c.age_days })),
-    ru: ru.turns.slice(-20),
+    // Ru's chat is deliberately not saved: a verdict is about the disk as it was, and stale advice reads as current
   } }).catch(() => {}), 400);
 }
 async function loadState() {
@@ -1164,8 +1164,6 @@ async function loadState() {
     if (st.color) { colorMode = st.color; syncColorMode(); }
     if (st.filter !== undefined && !params.get('f')) { filter = st.filter; idleDays = st.idleDays ?? 0; if (filter === 'idle' && !idleDays) filter = ''; syncFilterButtons(); }
     for (const c of st.picked ?? []) picked.set(c.path, c);
-    for (const t of st.ru ?? []) { ru.turns.push(t); ruAdd(t.who, t.text); }
-    if (ru.turns.length) ruEl.querySelector('.clear').hidden = false;
   }
   stateLoaded = true;
 }
@@ -2127,10 +2125,9 @@ const ruSync = () => { if (ru.open) { ruCtxLine(); ruSuggest(); } };
 function ruSuggest() {
   const el = ruEl.querySelector('.sugg'); el.innerHTML = '';
   if (ru.turns.length) return;
-  const qs = { selection: mode === 'mem' ? ['Why is this process using so much?', 'Is it safe to quit?'] : ru.sel.size > 1 ? ['Validate these: which can really go?', 'Anything here still in use or referenced?'] : ['Validate this: can it really go?', 'What breaks if I delete it?'],
-    folder: [current?.path ? `Validate what Di flagged in ${current.name}` : 'Validate what Di flagged: what can really go first?', 'What here looks like it needs a closer look?'],
-    shelf: ['Anything on the shelf I can delete for good?', 'Should any of these go back?'] }[ru.area] ?? [];
-  for (const q of qs) { const b = document.createElement('button'); b.type = 'button'; b.textContent = q; b.onclick = () => ruAsk(q); el.appendChild(b); }
+  // one question, because there is only one thing Ru is for
+  const q = 'Validate this can be deleted';
+  const b = document.createElement('button'); b.type = 'button'; b.textContent = q; b.onclick = () => ruAsk(q); el.appendChild(b);
 }
 async function ruOpen(area) {
   ru.open = true; ruEl.hidden = false; document.body.classList.add('ru-open'); hideMenu(); tip.hidden = true;
@@ -2213,7 +2210,7 @@ $('#reset').onclick = async () => {
   };
   resetEl.showModal();
 };
-ruEl.querySelector('.clear').onclick = () => { if (ru.busy) return; ru.turns.length = 0; ru.pinned = false; saveState(); ruMsgs.innerHTML = ''; ruEl.querySelector('.clear').hidden = true; ruCtxLine(); ruSuggest(); ruIn.focus(); };
+ruEl.querySelector('.clear').onclick = () => { if (ru.busy) return; ru.turns.length = 0; ru.pinned = false; ruMsgs.innerHTML = ''; ruEl.querySelector('.clear').hidden = true; ruCtxLine(); ruSuggest(); ruIn.focus(); };
 ruEl.querySelector('form').onsubmit = (e) => { e.preventDefault(); if (ru.busy) ru.abort?.abort(); else ruAsk(ruIn.value); }; // the Ask button is Stop while Ru works
 ruIn.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ruAsk(ruIn.value); } };
 ruIn.oninput = () => { ruIn.style.height = 'auto'; ruIn.style.height = `${Math.min(120, ruIn.scrollHeight)}px`; };
@@ -2355,7 +2352,7 @@ async function ruAsk(q) {
   if (denied.length) text += `\n\n_Not allowed to run: ${[...new Set(denied)].slice(0, 3).map((c) => `\`${c.slice(0, 240)}\``).join(' · ')}. Ru only gets read-only commands._`;
   const [shown, verdict] = splitVerdict(text);
   m.innerHTML = md(shown || 'Ru said nothing.'); m.prepend(cap()); if (verdict) renderVerdict(m, verdict); ruMsgs.scrollTop = ruMsgs.scrollHeight;
-  ru.turns.push({ who: 'me', text: q }, { who: 'ru', text: shown }); ruEl.querySelector('.clear').hidden = false; saveState();
+  ru.turns.push({ who: 'me', text: q }, { who: 'ru', text: shown }); ruEl.querySelector('.clear').hidden = false; // turns live for this session only
   ru.busy = false; ru.abort = null; ruSend.classList.remove('stop'); ruSend.textContent = 'Ask'; ruSend.title = ''; ruIn.focus();
   if (outOfTurns && !verdict && !q.startsWith('Ru ran out of checks')) ruAsk('Ru ran out of checks before answering. Give the verdict now from what you found, no more checks.'); // one follow-up, with the transcript, so the work is not lost
 }
