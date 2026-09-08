@@ -2105,7 +2105,18 @@ const R_CORE = 11, R_RIM = 72;
 const COL_COOL = new THREE.Color('#3B6FB6'), COL_WARM = new THREE.Color('#8A5BC7'), COL_HOT2 = new THREE.Color('#FF7A3D');
 const cpuColor = (t) => t < 0.5 ? new THREE.Color().lerpColors(COL_COOL, COL_WARM, t * 2) : new THREE.Color().lerpColors(COL_WARM, COL_HOT2, (t - 0.5) * 2);
 const orbGeo = new THREE.SphereGeometry(1, 32, 20);
-const trailMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+// pixie dust rather than a drawn line: soft round sprites that fade along the tail. Additive
+// blending means the per-vertex colour fade already reads as fading out.
+let _dustTex = null;
+function dustTex() {
+  if (_dustTex) return _dustTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.22, 'rgba(255,255,255,.6)'); r.addColorStop(0.55, 'rgba(255,255,255,.16)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  _dustTex = new THREE.CanvasTexture(c); return _dustTex;
+}
+const trailMat = new THREE.PointsMaterial({ size: 2.4, map: dustTex(), vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true });
 const TRAIL_N = 28;
 
 function orbitBuildStatic() {
@@ -2147,7 +2158,7 @@ function orbitSync() {
       const tg = new THREE.BufferGeometry();
       tg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_N * 3), 3));
       tg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(TRAIL_N * 3), 3));
-      const trail = new THREE.Line(tg, trailMat); orbit.group.add(trail);
+      const trail = new THREE.Points(tg, trailMat); orbit.group.add(trail);
       const el = document.createElement('div'); el.className = 'olbl'; const lbl = new CSS2DObject(el); lbl.center.set(0.5, 1); m.add(lbl);
       const ring = new THREE.Mesh(new THREE.RingGeometry(1.35, 1.55, 48), new THREE.MeshBasicMaterial({ color: '#F5C26B', transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
       ring.rotation.x = -Math.PI / 2; m.add(ring);
@@ -2209,14 +2220,15 @@ function updateOrbit(dt, now) {
     o.m.material.color.lerp(o.col, f); o.m.material.emissive.lerp(o.col, f);
     o.m.material.emissiveIntensity = smooth(o.m.material.emissiveIntensity, lit ? 1.1 : 0.25 + (o.f ?? 0) * 0.8, f);
     // trail
-    if (doTrail) { o.hist.push([o.x, y, o.z]); if (o.hist.length > TRAIL_N) o.hist.shift(); }
+    if (doTrail) { const j = 0.35 + o.size * 0.12; o.hist.push([o.x + (Math.random() - 0.5) * j, y + (Math.random() - 0.5) * j, o.z + (Math.random() - 0.5) * j]); if (o.hist.length > TRAIL_N) o.hist.shift(); }
     const pos = o.trail.geometry.attributes.position, col = o.trail.geometry.attributes.color;
     const n = o.hist.length;
     for (let i = 0; i < TRAIL_N; i++) {
       const h = o.hist[Math.max(0, i - (TRAIL_N - n))] ?? [o.x, y, o.z];
       pos.setXYZ(i, h[0], h[1], h[2]);
       const t = i / (TRAIL_N - 1), c = o.col;
-      col.setXYZ(i, c.r * t * 0.9, c.g * t * 0.9, c.b * t * 0.9);
+      const f = t * t * (0.55 + 0.75 * t); // the oldest grains all but vanish, the newest catch the light
+      col.setXYZ(i, c.r * f, c.g * f, c.b * f);
     }
     pos.needsUpdate = true; col.needsUpdate = true; o.trail.geometry.setDrawRange(0, TRAIL_N);
     // odd ring
