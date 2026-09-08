@@ -1,6 +1,7 @@
 mod gunk;
 mod hog;
 mod ru;
+mod rules;
 mod scan;
 mod snapshot;
 mod vault;
@@ -47,6 +48,10 @@ fn bad(msg: impl Into<String>) -> ApiErr {
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|a| a == "--rules") {
+        print!("{}", rules::BUILTIN); // copy to ~/.dime/rules.toml and edit
+        return;
+    }
     // the data folder used to be ~/.dume; carry it over once so the vault, state and snapshots survive the rename
     if let Ok(h) = std::env::var("HOME") {
         let (old, new) = (PathBuf::from(&h).join(".dume"), PathBuf::from(&h).join(".dime"));
@@ -400,7 +405,7 @@ async fn gunk_list(State(app): State<Shared>, Query(q): Query<GunkQ>) -> Result<
     }
     // every group gets its full list (capped per kind so one huge kind cannot swamp the payload), best first
     let mut per: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    Ok(Json(gunk::under(&all, &q.path).filter(|c| { let n = per.entry(c.reason).or_default(); *n += 1; *n <= 500 }).cloned().collect()))
+    Ok(Json(gunk::under(&all, &q.path).filter(|c| { let n = per.entry(c.reason.as_str()).or_default(); *n += 1; *n <= 500 }).cloned().collect()))
 }
 
 async fn summary(State(app): State<Shared>, Query(q): Query<GunkQ>) -> Result<Json<gunk::Summary>, ApiErr> {

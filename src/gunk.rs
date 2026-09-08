@@ -1,22 +1,12 @@
 //! Finds removal candidates in the scanned tree and explains each one in plain language.
 //! Every candidate gets a tier: `safe` (regenerated automatically), `likely` (usually fine
-//! once you glance at it), `review` (big or old, your call).
+//! once you glance at it), `review` (big or old, your call). The rules are data: see rules.rs.
+use crate::rules::{self, Item, Rule};
 use crate::scan::{join, Node};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CACHE_DIRS: &[&str] = &[
-    "node_modules", "target", ".venv", "venv", "__pycache__", ".gradle", ".npm", ".pnpm-store", ".m2",
-    "Pods", ".next", ".turbo", ".tox", ".mypy_cache", ".pytest_cache", ".parcel-cache", ".nuxt",
-    "DerivedData", ".cargo-cache", "bower_components", ".dart_tool", ".angular",
-];
-const BUILD_DIRS: &[&str] = &["build", "dist", "out", ".build"];
-const APP_CACHE_DIRS: &[&str] = &["Caches", ".cache", "CachedData", "Code Cache", "GPUCache", "Cache", "ShaderCache"];
-const SIM_DIRS: &[&str] = &["CoreSimulator", "iOS DeviceSupport", "watchOS DeviceSupport", "tvOS DeviceSupport", "visionOS DeviceSupport"];
-const PROJECT_MARKERS: &[&str] = &["package.json", "Cargo.toml", "pyproject.toml", "go.mod", "Gemfile", "pom.xml", "build.gradle", "Package.swift", ".git"];
-const INSTALLER_EXT: &[&str] = &["dmg", "pkg", "iso", "zip", "tgz", "gz", "xz", "bz2", "7z", "rar", "msi", "exe", "app.zip", "ipa", "apk"];
-const DISK_IMAGE_EXT: &[&str] = &["qcow2", "vmdk", "vdi", "vhd", "vhdx", "img", "raw", "sparseimage", "sparsebundle"];
 const MB: u64 = 1 << 20;
 const DAY: i64 = 86_400;
 
@@ -26,9 +16,9 @@ pub struct Candidate {
     pub name: String,
     pub size: u64,
     /// kind id, e.g. "cache", "downloads", "large"
-    pub reason: &'static str,
-    pub tier: &'static str,
-    pub what: &'static str,
+    pub reason: String,
+    pub tier: String,
+    pub what: String,
     pub note: String,
     pub age_days: i64,
     pub is_dir: bool,
@@ -42,11 +32,12 @@ pub struct Candidate {
 pub struct Summary {
     pub total: u64,
     pub tiers: Vec<(&'static str, u64, usize)>,
-    pub kinds: Vec<(&'static str, &'static str, &'static str, u64, usize)>,
+    pub kinds: Vec<(String, String, String, u64, usize)>,
 }
 
 struct Walk {
     now: i64,
+    rules: Vec<Rule>,
     out: Vec<Candidate>,
     /// (size, name) -> first path seen, for cheap duplicate detection of big files
     seen: HashMap<(u64, String), (String, i64)>,
@@ -60,10 +51,11 @@ fn months(days: i64) -> String {
 }
 
 /// All candidates in the tree, best first. Compute once per tree version; filter by prefix per request.
+/// Rules are re-read each time, so edits to ~/.dime/rules.toml show up on the next rescan.
 pub fn find_all(root: &Node) -> Vec<Candidate> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let mut w = Walk { now, out: vec![], seen: HashMap::new() };
-    walk(&mut w, root, "", false);
+    let mut w = Walk { now, rules: rules::load(), out: vec![], seen: HashMap::new() };
+    walk(&mut w, root, "");
     w.out.sort_by(|a, b| b.score.total_cmp(&a.score));
     w.out
 }
@@ -74,109 +66,63 @@ pub fn under<'a>(all: &'a [Candidate], prefix: &str) -> impl Iterator<Item = &'a
 }
 
 pub fn summary<'a>(cands: impl Iterator<Item = &'a Candidate>) -> Summary {
-    let mut tiers: Vec<(&str, u64, usize)> = vec![("safe", 0, 0), ("likely", 0, 0), ("review", 0, 0)];
-    let mut kinds: HashMap<&'static str, (&'static str, &'static str, u64, usize)> = HashMap::new();
+    let mut tiers: Vec<(&'static str, u64, usize)> = rules::TIERS.iter().map(|t| (*t, 0, 0)).collect();
+    let mut kinds: HashMap<&str, (&str, &str, u64, usize)> = HashMap::new();
     let mut total = 0;
     for c in cands {
         total += c.size;
         let t = tiers.iter_mut().find(|t| t.0 == c.tier).unwrap();
         t.1 += c.size;
         t.2 += 1;
-        let k = kinds.entry(c.reason).or_insert((c.tier, c.what, 0, 0));
+        let k = kinds.entry(&c.reason).or_insert((&c.tier, &c.what, 0, 0));
         k.2 += c.size;
         k.3 += 1;
     }
-    let mut kinds: Vec<_> = kinds.into_iter().map(|(id, (tier, what, size, n))| (id, tier, what, size, n)).collect();
+    let mut kinds: Vec<_> = kinds.into_iter().map(|(id, (tier, what, size, n))| (id.into(), tier.into(), what.into(), size, n)).collect();
     kinds.sort_by(|a, b| b.3.cmp(&a.3));
     Summary { total, tiers, kinds }
 }
 
-fn walk(w: &mut Walk, n: &Node, path: &str, in_downloads: bool) {
+fn walk(w: &mut Walk, n: &Node, path: &str) {
     for c in &n.children {
-        let p = join(path, &c.name);
-        let age = ((w.now - c.atime.max(c.mtime)) / DAY).max(0);
-        let idle = format!("Idle {}.", months(age));
-        let mk = |reason, tier, what, note: String, weight: f64| Candidate {
-            path: p.clone(),
-            name: c.name.clone(),
-            size: c.size,
-            reason,
-            tier,
-            what,
-            note,
-            age_days: age,
-            is_dir: c.is_dir,
-            score: c.size as f64 * weight * (1.0 + age as f64 / 365.0),
-            full_size: None,
-        };
-        let name = c.name.as_str();
-        if c.is_dir {
-            if c.size < MB {
-                continue;
-            }
-            let hit = if CACHE_DIRS.contains(&name) {
-                Some(mk("cache", "safe", "Build & dependency caches", "Recreated the next time you build or install.".into(), 3.0))
-            } else if APP_CACHE_DIRS.contains(&name) {
-                Some(mk("appcache", "safe", "App caches", "Apps rebuild this as needed. Some may start slower once.".into(), 2.5))
-            } else if SIM_DIRS.contains(&name) {
-                Some(mk("simulator", "safe", "Xcode simulators & device support", "Xcode downloads again only for devices you actually use.".into(), 2.5))
-            } else if name == ".Trash" {
-                Some(mk("trash", "safe", "Already in the Trash", "Empty the Trash to get this space back.".into(), 3.0))
-            } else if name == ".ollama" || name == ".lmstudio" || (name == "hub" && path.ends_with("huggingface")) {
-                Some(mk("models", "review", "AI models", "Downloaded model weights. Pulled again automatically if you use them.".into(), 1.2))
-            } else if name == "Backup" && path.ends_with("MobileSync") {
-                Some(mk("backups", "review", "iPhone & iPad backups", "Device backups. Remove old ones in Finder > device > Manage Backups.".into(), 1.2))
-            } else if name == "Archives" && path.ends_with("Developer/Xcode") {
-                Some(mk("archives", "review", "Xcode archives", "Old app builds. Keep only ones you still ship.".into(), 1.2))
-            } else if BUILD_DIRS.contains(&name) && c.size >= 20 * MB {
-                Some(mk("build", "likely", "Build output", "Regenerated by the next build. Check it is not deployed from here.".into(), 1.5))
-            } else if name == "Logs" && c.size >= 50 * MB {
-                Some(mk("logs", "likely", "Logs", "Apps write fresh logs. Old ones are rarely needed.".into(), 1.5))
-            } else if age > 180 && c.size >= 50 * MB && c.children.iter().any(|k| PROJECT_MARKERS.contains(&k.name.as_str())) {
-                Some(mk("project", "review", "Untouched projects", format!("No changes in {}. Archive it or delete it.", months(age)), 1.0))
-            } else {
-                None
-            };
-            if let Some(h) = hit {
-                w.out.push(h);
-            } else {
-                walk(w, c, &p, in_downloads || name == "Downloads");
-            }
-            continue;
-        }
         if c.size < MB {
             continue;
         }
-        let e = ext(name);
-        if c.size >= 5 * MB {
+        let p = join(path, &c.name);
+        let age = ((w.now - c.atime.max(c.mtime)) / DAY).max(0);
+        let mk = |rule: &Rule, note: String| Candidate {
+            path: p.clone(),
+            name: c.name.clone(),
+            size: c.size,
+            reason: rule.id.clone(),
+            tier: rule.tier.clone(),
+            what: rule.what.clone(),
+            note,
+            age_days: age,
+            is_dir: c.is_dir,
+            score: c.size as f64 * rule.weight * (1.0 + age as f64 / 365.0),
+            full_size: None,
+        };
+        if !c.is_dir && c.size >= 5 * MB {
+            // duplicates need state across the walk, so this one stays built in
             let key = (c.size, c.name.clone());
             if let Some((other, other_m)) = w.seen.get(&key).cloned() {
                 if other_m >= c.mtime {
-                    w.out.push(mk("duplicate", "review", "Possible duplicates", format!("Same name and size as {other}."), 1.5));
+                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], min_size: 0, min_age_days: 0 };
+                    w.out.push(mk(&dup, format!("Same name and size as {other}.")));
                     continue;
                 }
             }
             w.seen.insert(key, (p.clone(), c.mtime));
         }
-        let hit = if name == "Docker.raw" {
-            Some(mk("diskimage", "review", "VM & disk images", "Docker Desktop's disk. Shrink it from Docker's settings, not by deleting.".into(), 1.0))
-        } else if DISK_IMAGE_EXT.contains(&e.as_str()) && c.size >= 100 * MB {
-            Some(mk("diskimage", "review", "VM & disk images", format!("Virtual disk. Delete only if the VM is gone. {idle}"), 1.0))
-        } else if INSTALLER_EXT.contains(&e.as_str()) && c.size >= 5 * MB && age > 7 {
-            Some(mk("installer", "likely", "Installers & archives", format!("Usually done with once installed or extracted. {idle}"), 1.8))
-        } else if in_downloads && age > 30 {
-            Some(mk("downloads", "likely", "Old downloads", format!("Sitting in Downloads. {idle}"), 1.8))
-        } else if (e == "log" || e == "crash") && c.size >= 10 * MB {
-            Some(mk("logs", "likely", "Logs", format!("Apps write fresh logs. {idle}"), 1.5))
-        } else if c.size >= 100 * MB {
-            Some(mk("large", "review", "Large files", if age > 180 { idle.clone() } else { "Used recently. Worth knowing it is here.".into() }, 1.0))
-        } else if c.size >= 10 * MB && age > 180 {
-            Some(mk("stale", "review", "Big and idle", idle.clone(), 1.0))
-        } else {
-            None
-        };
-        if let Some(h) = hit {
-            w.out.push(h);
+        let e = ext(&c.name);
+        let kids: Vec<String> = if c.is_dir { c.children.iter().map(|k| k.name.clone()).collect() } else { vec![] };
+        let it = Item { name: &c.name, is_dir: c.is_dir, ext: &e, size: c.size, age_days: age, parent: path, children: &kids };
+        if let Some(r) = w.rules.iter().find(|r| r.matches(&it)) {
+            let note = r.note.replace("{idle}", &format!("Idle {}.", months(age))).replace("{age}", &months(age));
+            w.out.push(mk(r, note));
+        } else if c.is_dir {
+            walk(w, c, &p);
         }
     }
 }

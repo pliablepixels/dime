@@ -4,7 +4,7 @@ Di digs through your disk. Me watches your memory. Ru says what can go. Three ex
 
 [![DiMe demo](docs/demo.gif)](https://youtu.be/4IOH1g5C7oI)
 
-*Click for the full video with sound.*
+*Click for the full video.*
 
 ## Install
 
@@ -46,5 +46,31 @@ DiMe keeps its own files in `~/.dime`: the vault (`vault/`), remembered per-root
 **Me (memory)**: a live dashboard, updated every 2 s. Totals for memory, CPU, GPU, network and disk IO. An odd-behaviour list that flags runaway or bursty CPU, heavy or bursty network, uploads, memory growth, disk hammering, and large idle processes, each with a plain sentence and how long it has been going on. Ranked lanes for CPU, GPU, Network and Disk IO with 60 s sparklines, plus the top memory holders. Click any process for a drawer with six sparklines, the app path, and its open files grouped by folder. Click a folder or file to land there on the disk map. Per-process GPU comes from Metal's accumulated GPU time in IOKit, no root needed.
 
 **Ru (guru)**: Di finds, Ru validates. The gear at the top right picks what Ru thinks with: Auto (first of Claude, Codex, an endpoint), or one of them, or none. The endpoint form takes a URL, model, and key; `DIME_RU`, `DIME_RU_URL`, `DIME_RU_MODEL`, `DIME_RU_KEY` (or `OPENAI_API_KEY`) do the same from the environment. The choice is saved in `~/.dime/settings.json` and switches without a restart. The drawer header says which one is answering. Ask about the selection, the folder in view, or the vault; Ru gets what Di knows about it, can query Di's index (`di tree`, `di flagged`, `di find`, `di idle`) and inspect the disk with read-only commands only, then answers with a verdict per item. Verdicts become a button that adds Ru's picks to your list; the move or delete still happens only from the list. Drag rows or hold a block on the map to hand Ru something. Everything Ru is given is shown under "show what Ru sees".
+
+## Your own rules
+
+Di's rules for what can go are data, not code. See what ships:
+
+```sh
+dime --rules > ~/.dime/rules.toml
+```
+
+Edit that file. Your rules run before the built-ins, the first match wins, and `disable = ["downloads"]` switches a built-in off. Rescan to apply. A rule:
+
+```toml
+[[rule]]
+id = "docker-images"        # groups items in the Cleanup panel
+tier = "review"             # safe | likely | review
+what = "Docker images"
+note = "Pull again when needed. {idle}"
+weight = 1.5                # score multiplier
+dir = true                  # folders only; false = files only; omit = either
+name = ["overlay2"]         # any of
+parent_ends_with = "docker"
+min_size = "500 MB"
+min_age_days = 30
+```
+
+All matchers are optional and every one given must hold: `name`, `ext`, `parent_ends_with`, `under` (an ancestor folder's name), `has_child` (names directly inside), `min_size`, `min_age_days`. The header of the built-in file documents each. A broken file is reported on stderr and ignored.
 
 Backend: Rust (axum, rayon, sysinfo, notify). Frontend: one HTML + one JS file, Three.js from CDN, no build step.
