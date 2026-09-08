@@ -15,8 +15,8 @@ const api = async (url, body) => {
 };
 const fmt = (b) => { const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++; } return (i ? b.toFixed(b < 10 ? 1 : 0) : b) + ' ' + u[i]; };
 const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n);
-// While a scan runs the total is shown in whole megabytes: gigabytes tick over far too slowly to read as progress.
-// Once it finishes, fmt takes over and picks the unit that fits.
+// A folder still being counted shows whole megabytes, because gigabytes tick over far too slowly to
+// read as progress. The moment it is done, fmt takes over and picks the unit that fits.
 const fmtScan = (b) => b < (1 << 20) ? fmt(b) : Math.round(b / (1 << 20)).toLocaleString() + ' MB';
 const ageDays = (n) => Math.max(0, Math.floor((Date.now() / 1000 - Math.max(n.atime, n.mtime)) / 86400));
 const fmtAge = (d) => d === 0 ? 'used today' : d < 30 ? `${d}d idle` : d < 365 ? `${Math.round(d / 30)}mo idle` : `${(d / 365).toFixed(1)}y idle`;
@@ -598,7 +598,7 @@ function entriesFor(kids, { live } = {}) {
     const gunk = !live && gunkSet.has(n.path);
     const base = colorMode === 'type' && n.types ? TYPE_COLOR[dominant(n.types)] : heatColor(Math.min(1, ageDays(n) / 365)); // idle view keeps the usual colours; the threshold shows up top instead
     const color = live ? (colorMode === 'type' && n.types?.some(Boolean) ? TYPE_COLOR[dominant(n.types)] : n.done ? COL_BLUE : COL_FORM) : n.path === '' ? COL_DIM : FILTER_COLOR[filter] ?? (gunk && filter !== 'idle' && colorMode !== 'type' ? TIER_COLOR[gunkSet.get(n.path).tier] : base);
-    const sub = live ? (n.done ? fmt(n.size) : `${fmt(n.size)} so far`) : filter === 'idle' ? `${fmt(n.size)} idle` : filter ? `${fmt(n.size)} flagged` : n.is_dir ? `${fmt(n.size)} · ${fmtN(n.files)} files` : fmt(n.size);
+    const sub = live ? (n.done ? fmt(n.size) : `${fmtScan(n.size)} so far`) : filter === 'idle' ? `${fmt(n.size)} idle` : filter ? `${fmt(n.size)} flagged` : n.is_dir ? `${fmt(n.size)} · ${fmtN(n.files)} files` : fmt(n.size);
     const inner = !live && n.children ? n.children.filter((c) => c.size > 0 && c.path && matches(c)).map((c) => filter ? { ...c, size: matchedSize(c) } : c).slice(0, 16) : null;
     const edge = gunk && !live && filter !== 'idle' ? TIER_COLOR[gunkSet.get(n.path).tier] : null; // flagged items keep a tier-coloured rim even in type mode
     return { key, name: n.name, sub, node: live ? { ...n, path: n.name } : n, rect: { x: r.x, z: r.z, w: r.w, h: r.h }, y: heightFor(n.size, max), color, edge, em: live ? 0.03 : gunk || filter ? 0.45 : 0.12, pulse: gunk && !live ? 'slow' : false, inner, fly: live };
@@ -1258,7 +1258,7 @@ async function watchScan() {
     const s = await api('/api/status');
     if (s.state === 'done') return s;
     if (s.state !== 'scanning') throw new Error('scan stopped');
-    $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmtScan(s.size)}`;
+    $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmt(s.size)}`;
     if (mode === 'disk') { setBlocks(entriesFor(s.live, { live: true })); crewAssign(s.live); }
     await sleep(120);
   }
