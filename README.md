@@ -4,7 +4,7 @@
 
 _Di_ digs through your disk. _Me_ watches your memory. _Ru_ gives sage advice. In the age of agents & models keep track of what's eating up your mac.
 
-[![DiMe demo](docs/demo.gif)](https://youtu.be/4IOH1g5C7oI)
+[![DiMe demo](docs/demo.gif)](https://www.youtube.com/watch?v=CCvcYh9r6j4)
 
 *Click for the full video.*
 
