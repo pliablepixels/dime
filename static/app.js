@@ -348,6 +348,100 @@ function updateRipples(dt, now) {
   }
   rip.count = n; rip.instanceMatrix.needsUpdate = true; if (rip.instanceColor) rip.instanceColor.needsUpdate = true;
 }
+// ---- construction sites: the treemap grows like a skyline, so Di's ground crew builds it
+// A site rides the top of a folder that is still being counted: a climbing crane whose hook tracks
+// the height, a dozer working the deck, and two figures in hard hats. When the count lands, they
+// pack up and the site moves to the next tower.
+const sites = { pool: [], group: new THREE.Group() };
+scene.add(sites.group);
+const SITE_FIT = 6.5; // a deck narrower than this has no room for a crew, so it stays bare
+const siteScale = (w, h) => Math.max(0.62, Math.min(1.15, Math.min(w, h) / 14)); // the crew shrinks to fit its deck, but never past legibility
+function makeSite() {
+  const g = new THREE.Group();
+  const gold = () => new THREE.MeshStandardMaterial({ color: '#F5C26B', roughness: 0.5, metalness: 0.3, transparent: true });
+  const dark = () => new THREE.MeshStandardMaterial({ color: '#46557A', roughness: 0.75, transparent: true });
+  const mats = [];
+  const use = (m) => { mats.push(m); return m; };
+
+  const crane = new THREE.Group();
+  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.55, 13, 0.55), use(gold())); mast.position.y = 6.5;
+  const jib = new THREE.Mesh(new THREE.BoxGeometry(12, 0.35, 0.35), use(gold())); jib.position.set(3.4, 12.7, 0);
+  const cw = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.9), use(dark())); cw.position.set(-2.6, 12.7, 0);
+  const cable = new THREE.Mesh(new THREE.BoxGeometry(0.09, 6, 0.09), use(dark())); cable.position.set(8, 9.7, 0);
+  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.8), use(gold())); hook.position.set(8, 6.7, 0);
+  crane.add(mast, jib, cw, cable, hook); g.add(crane);
+
+  const doz = new THREE.Group(); doz.scale.setScalar(1.5);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1, 1.5), use(gold())); body.position.y = 0.75;
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.2, 2.1), use(dark())); blade.position.set(1.5, 0.65, 0);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1, 0.85, 1.1), use(dark())); cab.position.set(-0.5, 1.6, 0);
+  doz.add(body, blade, cab); g.add(doz);
+
+  const workers = [];
+  for (let i = 0; i < 2; i++) {
+    const w = new THREE.Group(); w.scale.setScalar(1.6);
+    const legs = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.9, 0.38), use(dark())); legs.position.y = 0.45;
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.72, 0.48), use(new THREE.MeshStandardMaterial({ color: '#E8457A', roughness: 0.6, transparent: true }))); torso.position.y = 1.22;
+    const hat = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), use(new THREE.MeshStandardMaterial({ color: '#FFD98A', roughness: 0.4, transparent: true }))); hat.position.y = 1.68;
+    w.add(legs, torso, hat); g.add(w);
+    workers.push({ g: w, phase: Math.random() * 6.3 });
+  }
+  sites.group.add(g);
+  return { g, crane, jib, cable, hook, doz, workers, mats, key: null, out: 0, phase: Math.random() * 6.3 };
+}
+function updateSites(dt, now) {
+  sites.group.visible = scanning || sites.pool.some((s) => s.key || s.out > 0);
+  if (!sites.group.visible) return;
+  // the biggest decks still being counted, so the crew is always somewhere worth watching
+  const open = scanning ? [...crew.busy].filter((k) => { const m = byKey.get(k); if (!m) return false; const r = m.userData.cur; return Math.min(r.w, r.h) >= SITE_FIT; })
+    .sort((a, b) => byKey.get(b).scale.y - byKey.get(a).scale.y).slice(0, 6) : [];
+  const taken = new Set(sites.pool.map((s) => s.key).filter(Boolean));
+  for (const k of open) {
+    if (taken.has(k)) continue;
+    let free = sites.pool.find((s) => !s.key && s.out <= 0);
+    if (!free && sites.pool.length < 6) { free = makeSite(); sites.pool.push(free); }
+    if (!free) break;
+    free.key = k; free.out = 0; taken.add(k);
+  }
+  for (const s of sites.pool) {
+    const m = s.key && byKey.get(s.key);
+    if (s.key && (!m || !open.includes(s.key))) { s.key = null; s.out = 0.0001; } // count landed: pack up
+    if (!s.key && s.out > 0) { s.out = Math.min(1, s.out + dt / 0.9); if (s.out >= 1) { s.g.visible = false; s.out = 0; } }
+    if (!s.key && !s.out) { s.g.visible = false; continue; }
+    const live = m ? m : null;
+    if (!live && !s.out) continue;
+    s.g.visible = true;
+    if (live) {
+      const r = live.userData.cur;
+      s.g.position.set(r.x + r.w / 2, live.position.y + live.scale.y / 2, r.z + r.h / 2);
+      s.rw = Math.min(r.w, 34); s.rh = Math.min(r.h, 34);
+    }
+    const fade = s.out ? 1 - s.out : 1;
+    for (const mat of s.mats) mat.opacity = fade;
+    s.g.position.y -= s.out * 6 * dt; // the site sinks away as it clears
+    // the whole crew scales to the deck, so offsets below are in the site's own units
+    const k = siteScale(s.rw ?? 12, s.rh ?? 12);
+    s.g.scale.setScalar(k);
+    const rw = (s.rw ?? 12) / k, rh = (s.rh ?? 12) / k;
+    // the crane stands at a corner of the deck and slews slowly, hook riding the tower up
+    s.crane.position.set(-rw * 0.3, 0, -rh * 0.3);
+    if (!REDUCED) s.crane.rotation.y = Math.sin(now / 5200 + s.phase) * 0.9;
+    const lift = 3 + Math.sin(now / 1800 + s.phase) * 2.2;
+    s.hook.position.y = REDUCED ? 6.7 : 5.4 + lift;
+    s.cable.position.y = s.hook.position.y + 3; s.cable.scale.y = Math.max(0.2, (12.7 - s.hook.position.y) / 6);
+    // the dozer works a slow loop of the deck, nose pointing the way it is going
+    const a = REDUCED ? 0 : now / 2600 + s.phase;
+    const dx = Math.cos(a) * rw * 0.26, dz = Math.sin(a) * rh * 0.26;
+    s.doz.position.set(dx, 0, dz);
+    s.doz.rotation.y = -a + Math.PI / 2;
+    s.workers.forEach((w, i) => {
+      const t = REDUCED ? 0 : now / 900 + w.phase;
+      w.g.position.set(rw * (i ? 0.24 : -0.18), Math.abs(Math.sin(t)) * 0.18, rh * (i ? -0.22 : 0.26));
+      w.g.rotation.y = Math.sin(t * 0.4) * 1.6;
+    });
+  }
+}
+
 // ---- escort: one chopper that flies in to shine on whatever you pick, and stays until you let go
 crew.escort = null;
 function escortTo(key) {
@@ -1546,9 +1640,9 @@ renderer.setAnimationLoop((now) => {
   updateCamera(dt, now);
   controls.update();
   updateIdle(dt, now);
-  updateCrew(dt, now); updateEscort(dt, now); updateHomeFlyers(dt, now);
+  updateCrew(dt, now); updateSites(dt, now); updateEscort(dt, now); updateHomeFlyers(dt, now);
   // Ru drifts on the landing, and comes out over the map whenever its panel is open
-  ruShow((!$('#landing').hidden && !$('#landing').classList.contains('away')) || (mode === 'disk' && ru.open));
+  ruShow((!$('#landing').hidden && !$('#landing').classList.contains('away')) || (mode === 'disk' && (ru.open || scanning)));
   updateRuBody(dt, now); updateMarks(dt); updateParcels(dt);
   if (mode === 'mem' && memView !== 'orbit') return; // list view is plain HTML; give the GPU a rest
   updateWorld(dt, now);
