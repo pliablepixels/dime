@@ -1,3 +1,5 @@
+<img src="packaging/icon.png" width="128" alt="">
+
 # DiMe
 
 Di digs through your disk. Me watches your memory. Ru says what can go. Three explorers, one map.
