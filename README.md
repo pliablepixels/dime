@@ -14,15 +14,15 @@ macOS only (it leans on FSEvents, nettop, lsof and IOKit). Apple silicon or Inte
 
 **Download the app**: grab `DiMe-<version>-macos.zip` from [Releases](https://github.com/pliablepixels/dime/releases), unzip it, drag `DiMe.app` to Applications, and open it. It runs in a window of its own on both Apple silicon and Intel.
 
-The app is signed only ad-hoc, not notarized, so the first launch needs one of:
+The app is signed ad-hoc rather than notarized, so macOS quarantines it on first launch. Either right-click the app and choose Open, or clear the flag yourself:
 
 ```
-xattr -dr com.apple.quarantine /Applications/DiMe.app   # or: right-click the app > Open
+xattr -dr com.apple.quarantine /Applications/DiMe.app
 ```
 
 **Give it Full Disk Access.** System Settings > Privacy & Security > Full Disk Access, add `DiMe.app`. Without it, protected folders (Mail, Messages, Safari data, other users) quietly measure smaller than they are.
 
-There is a command-line build too, `dime-<version>-macos.tar.gz`, which opens your browser instead of a window. Skip to step 3 for Ru.
+There is a command-line build too, `dime-<version>-macos.tar.gz`, which opens your browser instead of a window. Ru, the guru who validates what can go, needs one more thing either way: see **Optional, for Ru** below.
 
 **Or build from source**:
 
