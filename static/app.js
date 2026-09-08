@@ -396,13 +396,44 @@ function makeSite() {
   const gold = () => use(new THREE.MeshStandardMaterial({ color: '#F5C26B', roughness: 0.5, metalness: 0.3, transparent: true }));
   const dark = () => use(new THREE.MeshStandardMaterial({ color: '#46557A', roughness: 0.75, transparent: true }));
 
+  // A tower crane reads by its silhouette: a latticed mast, an A-frame apex with tie bars out to
+  // both arms, and a counterweight at the back. Solid bars alone just look like an L.
   const crane = new THREE.Group();
-  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.55, 13, 0.55), gold()); mast.position.y = 6.5;
-  const jib = new THREE.Mesh(new THREE.BoxGeometry(12, 0.35, 0.35), gold()); jib.position.set(3.4, 12.7, 0);
-  const cw = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.9), dark()); cw.position.set(-2.6, 12.7, 0);
-  const cable = new THREE.Mesh(new THREE.BoxGeometry(0.09, 6, 0.09), dark()); cable.position.set(8, 9.7, 0);
-  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.8), gold()); hook.position.set(8, 6.7, 0);
-  crane.add(mast, jib, cw, cable, hook); g.add(crane);
+  const H = 12.4, POST = 0.3; // mast height, and how far the corner posts sit from its centre
+  const steel = gold();
+  const foot = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 1.5), dark()); foot.position.y = 0.15; crane.add(foot);
+  for (const [px, pz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, H, 0.1), steel);
+    post.position.set(px * POST, H / 2, pz * POST); crane.add(post);
+  }
+  for (let y = 1.4; y < H; y += 1.9) { // the ties that make it read as lattice rather than a pole
+    for (const [w, d, ox, oz] of [[POST * 2, 0.07, 0, -POST], [POST * 2, 0.07, 0, POST], [0.07, POST * 2, -POST, 0], [0.07, POST * 2, POST, 0]]) {
+      const tie = new THREE.Mesh(new THREE.BoxGeometry(w, 0.07, d), steel); tie.position.set(ox, y, oz); crane.add(tie);
+    }
+  }
+  const slew = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, 1.1), dark()); slew.position.y = H + 0.25; crane.add(slew);
+  const opcab = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.9), dark()); opcab.position.set(0.9, H + 0.7, 0); crane.add(opcab);
+  // the A-frame above the slew, and the tie bars from its top out to each arm
+  const apexY = H + 3.2;
+  for (const sx of [-1, 1]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 3.3, 0.12), steel);
+    leg.position.set(sx * 0.55, H + 1.9, 0); leg.rotation.z = sx * 0.33; crane.add(leg);
+  }
+  const jib = new THREE.Group(); jib.position.y = H + 0.6; crane.add(jib);
+  const chord = new THREE.Mesh(new THREE.BoxGeometry(11.5, 0.16, 0.16), steel); chord.position.x = 5.2; jib.add(chord);
+  const lower = new THREE.Mesh(new THREE.BoxGeometry(11.5, 0.13, 0.13), steel); lower.position.set(5.2, -0.55, 0); jib.add(lower);
+  for (let x = 0.8; x < 11; x += 1.6) { const st = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.6, 0.09), steel); st.position.set(x, -0.28, 0); jib.add(st); }
+  const back = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.16, 0.5), steel); back.position.x = -1.7; jib.add(back);
+  const cw = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.1, 1.2), dark()); cw.position.set(-3, -0.3, 0); jib.add(cw);
+  for (const [x, len, tilt] of [[3.4, 7.4, 0.42], [-1.9, 4.0, -0.75]]) { // apex ties, fore and aft
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(len, 0.09, 0.09), steel);
+    bar.position.set(x, (apexY - (H + 0.6)) / 2, 0); bar.rotation.z = tilt; jib.add(bar);
+  }
+  const cable = new THREE.Mesh(new THREE.BoxGeometry(0.07, 6, 0.07), dark()); cable.position.set(8, -3, 0); jib.add(cable);
+  const trolley = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.5), dark()); trolley.position.set(8, -0.3, 0); jib.add(trolley);
+  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.5, 0.75), steel); hook.position.set(8, -6, 0); jib.add(hook);
+  jib.add(cable, trolley, hook);
+  g.add(crane);
 
   const doz = new THREE.Group(); doz.scale.setScalar(1.5);
   const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1, 1.5), gold()); body.position.y = 0.75;
@@ -467,9 +498,9 @@ function updateSites(dt, now) {
     // the crane stands at a corner of the deck and slews slowly, hook riding the tower up
     s.crane.position.set(-rw * 0.3, 0, -rh * 0.3);
     if (!REDUCED) s.crane.rotation.y = Math.sin(now / 5200 + s.phase) * 0.9;
-    const lift = 3 + Math.sin(now / 1800 + s.phase) * 2.2;
-    s.hook.position.y = REDUCED ? 6.7 : 5.4 + lift;
-    s.cable.position.y = s.hook.position.y + 3; s.cable.scale.y = Math.max(0.2, (12.7 - s.hook.position.y) / 6);
+    const drop = REDUCED ? 5.5 : 5.5 + Math.sin(now / 1800 + s.phase) * 2.6; // how far below the jib the hook hangs
+    s.hook.position.y = -drop;
+    s.cable.position.y = -drop / 2; s.cable.scale.y = Math.max(0.05, drop / 6);
     // the dozer works a slow loop of the deck, nose pointing the way it is going
     const a = REDUCED ? 0 : now / 2600 + s.phase;
     const dx = Math.cos(a) * rw * 0.26, dz = Math.sin(a) * rh * 0.26;
