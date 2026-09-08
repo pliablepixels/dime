@@ -338,7 +338,7 @@ async fn status(State(app): State<Shared>) -> Json<serde_json::Value> {
         _ => (0, 0, None),
     };
     Json(serde_json::json!({
-        "state": state, "root": root, "files": files, "size": size, "live": live, "as_of": as_of, "snapshots": snapshots, "ru": ru_label, "denied": denied,
+        "state": state, "root": root, "files": files, "size": size, "live": live, "as_of": as_of, "snapshots": snapshots, "ru": ru_label, "denied": denied, "fda": scan::full_disk_access(),
         "version": app.version.load(Ordering::Relaxed),
     }))
 }

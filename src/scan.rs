@@ -71,6 +71,22 @@ pub fn denied() -> u64 {
     DENIED.load(Ordering::Relaxed)
 }
 
+/// Does this process already hold Full Disk Access? The privacy database is the canonical probe:
+/// nothing but that grant opens it.
+///
+/// Worth asking because a refusal alone does not mean the grant is missing. macOS also seals system
+/// data vaults (`/private/var/db`, the sandbox caches under `/private/var/folders`, Apple's model
+/// assets) that stay shut for everyone, granted or not. Suggesting Full Disk Access for those would
+/// send the user to a settings pane that cannot help them.
+pub fn full_disk_access() -> bool {
+    let Ok(home) = std::env::var("HOME") else { return true };
+    match fs::File::open(Path::new(&home).join("Library/Application Support/com.apple.TCC/TCC.db")) {
+        Ok(_) => true,
+        // missing or unreadable for any other reason: assume the grant is fine rather than nag
+        Err(e) => e.raw_os_error() != Some(libc::EPERM),
+    }
+}
+
 /// Did macOS refuse this, or is it just an ordinary directory we have no rights to?
 ///
 /// Rust reports both as `PermissionDenied`, but they need different advice: privacy refusals come
