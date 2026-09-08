@@ -73,11 +73,41 @@ fn in_bundle() -> bool {
     std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
 }
 
+/// A GUI launch gets a bare PATH, so every CLI Ru depends on is invisible: Finder hands the app
+/// /usr/bin:/bin and nothing else. Add the usual install folders, and inside a bundle also ask the
+/// login shell what its PATH really is. The inherited PATH stays first so a deliberate choice wins.
+fn widen_path() {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").iter().flat_map(std::env::split_paths).collect();
+    if in_bundle() {
+        if let Ok(shell) = std::env::var("SHELL") {
+            if let Ok(out) = std::process::Command::new(shell).args(["-lc", "printf %s \"$PATH\""]).output() {
+                if out.status.success() {
+                    dirs.extend(std::env::split_paths(String::from_utf8_lossy(&out.stdout).trim()));
+                }
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        for d in [".local/bin", ".cargo/bin", ".bun/bin", ".npm-global/bin", ".volta/bin", ".nvm/versions/node/current/bin"] {
+            dirs.push(PathBuf::from(&home).join(d));
+        }
+    }
+    for d in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"] {
+        dirs.push(PathBuf::from(d));
+    }
+    let mut seen = HashSet::new();
+    dirs.retain(|d| seen.insert(d.clone()));
+    if let Ok(joined) = std::env::join_paths(dirs) {
+        unsafe { std::env::set_var("PATH", joined) }; // before anything looks for claude, codex or jq
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--rules") {
         print!("{}", rules::BUILTIN); // copy to ~/.dime/rules.toml and edit
         return;
     }
+    widen_path();
     let windowed = !std::env::args().any(|a| a == "--browser") && (in_bundle() || std::env::args().any(|a| a == "--window"));
     // The webview must own the main thread, so the server gets a runtime of its own. `rt` stays alive for the whole run.
     let rt = tokio::runtime::Runtime::new().unwrap();
