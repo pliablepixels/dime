@@ -2262,18 +2262,20 @@ function renderVerdict(m, v) {
   for (const [label, cls, paths] of groups) { const g = document.createElement('div'); g.className = `vg ${cls}`; g.innerHTML = `<b></b><ul></ul>`; g.querySelector('b').textContent = `${label} · ${paths.length}`; for (const p of paths) { const li = document.createElement('li'); li.textContent = tilde(p); g.querySelector('ul').appendChild(li); } box.appendChild(g); }
   const acts = document.createElement('div'); acts.className = 'acts'; box.appendChild(acts);
   const mk = (label, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = `btn sm ${cls}`; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
-  const [goRows, outside] = verdictRows(goPaths(v));
-  if (goRows.length) mk(`Add ${goRows.length} to shortlist`, 'ru', () => {
-    for (const r of goRows) if (!picked.has(r.key)) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: 'review', reason: 'ru', what: 'Ru said it can go', note: 'Ru checked this one.', age_days: 0 });
-    if (current) renderCleanup(); toast(`Di: ${goRows.length} added to your shortlist`, 'du'); listDialog([...picked.values()].map(candRow));
-  });
-  // Ru can also undo Di: anything it says to keep comes straight back off the shortlist
-  const [keepRows] = verdictRows(v.keep), onList = keepRows.filter((r) => picked.has(r.key));
-  if (onList.length) mk(`Take ${onList.length} off the shortlist`, 'quiet', () => {
-    for (const r of onList) picked.delete(r.key);
+  // One button for the whole verdict: what Ru says can go joins the shortlist, what it says to keep
+  // leaves it. Only the items that would actually change are counted, so the button is never a no-op.
+  const [goRows, outside] = verdictRows(goPaths(v)), [keepRows] = verdictRows(v.keep);
+  const add = goRows.filter((r) => !picked.has(r.key)), drop = keepRows.filter((r) => picked.has(r.key));
+  const label = add.length && drop.length ? `Modify shortlist · add ${add.length}, drop ${drop.length}`
+    : add.length ? `Add ${add.length} to shortlist` : `Take ${drop.length} off the shortlist`;
+  if (add.length || drop.length) mk(label, 'ru', () => {
+    for (const r of add) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: 'review', reason: 'ru', what: 'Ru said it can go', note: 'Ru checked this one.', age_days: 0 });
+    for (const r of drop) picked.delete(r.key);
     if (current) renderCleanup(); else renderPickBar();
-    toast(`Di: ${onList.length} taken off your shortlist`, 'du');
+    toast(`Di: shortlist ${[add.length && `+${add.length}`, drop.length && `-${drop.length}`].filter(Boolean).join(' ')}`, 'du');
+    if (picked.size) listDialog([...picked.values()].map(candRow));
   });
+  else if (goRows.length || keepRows.length) { const n = document.createElement('div'); n.className = 'note'; n.textContent = 'Your shortlist already matches this.'; box.appendChild(n); }
   if (outside.length) { const o = document.createElement('div'); o.className = 'note'; o.textContent = `${outside.length} path${outside.length === 1 ? ' is' : 's are'} outside the scan root and cannot be acted on here.`; box.appendChild(o); }
   m.appendChild(box);
 }
