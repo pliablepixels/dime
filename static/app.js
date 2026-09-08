@@ -974,6 +974,7 @@ function openDialog({ title, sub, rows, select, gate, actions }) {
     const cb = el.querySelector('input'); cb.value = r.key; cb.checked = select ? r.checked ?? true : true; cb.hidden = !select; cb.onchange = sync;
     el.querySelector('.name').textContent = r.name; el.querySelector('.name').classList.toggle('dir', !!r.is_dir);
     el.querySelector('.sub').textContent = r.sub; el.querySelector('.sz').textContent = fmt(r.size);
+    if (r.files) { const pk = document.createElement('button'); pk.type = 'button'; pk.className = 'peek'; pk.textContent = 'see which files'; pk.onclick = (e) => { e.preventDefault(); e.stopPropagation(); dlg.close(); idleFilesDialog(r.files, r.name, true); }; el.querySelector('.sub').after(pk); }
     list.appendChild(el);
   }
   const gateEl = dlg.querySelector('.gate');
@@ -985,7 +986,7 @@ function openDialog({ title, sub, rows, select, gate, actions }) {
   function sync() { const c = chosen(), ok = c.length && (!gate || gateEl.querySelector('input').checked); for (const [b, a] of btns) { b.disabled = !ok; b.textContent = a.label(c); } }
   sync(); dlg.showModal();
 }
-const candRow = (c) => ({ key: c.path, name: c.name, is_dir: c.is_dir, size: c.size, sub: [parentOf(c.path) || rootName, c.what, c.full_size != null && c.full_size !== c.size ? `the idle ${fmt(c.size)} of ${fmt(c.full_size)}` : ''].filter(Boolean).join(' · ') });
+const candRow = (c) => ({ key: c.path, name: c.name, is_dir: c.is_dir, size: c.size, files: c.full_size != null && c.full_size !== c.size ? c.path : null, sub: [parentOf(c.path) || rootName, c.what, c.full_size != null && c.full_size !== c.size ? `the idle ${fmt(c.size)} of ${fmt(c.full_size)}` : ''].filter(Boolean).join(' · ') });
 // ---- a candidate row: tick it, unfold it in place to tick things inside it, or jump to it on the map. The map's scope never moves on its own.
 const openRows = new Set(), kidCache = new Map(); // expanded paths, and each one's children (keyed by path plus the idle threshold)
 function candRowEl(c, base, depth) {
@@ -1002,6 +1003,7 @@ function candRowEl(c, base, depth) {
   row.querySelector('.sz').textContent = fmt(c.size);
   row.querySelector('.fb').onclick = (e) => { e.stopPropagation(); api('/api/open', { path: c.path }).catch((err) => toast(err.message)); };
   row.querySelector('.mp').onclick = (e) => { e.stopPropagation(); navigate(parentOf(c.path), { highlight: c.path }); };
+  if (c.full_size != null && c.full_size !== c.size) { const pk = document.createElement('button'); pk.type = 'button'; pk.textContent = 'Files'; pk.title = 'See which files would actually move'; pk.onclick = (e) => { e.stopPropagation(); idleFilesDialog(c.path, c.name, false); }; row.querySelector('.acts').prepend(pk); }
   row.onmouseenter = () => (rowHover = base + rel.split('/')[0]); row.onmouseleave = () => (rowHover = null);
   row.onclick = () => { if (!c.is_dir) { pk.checked = !pk.checked; pk.onchange(); return; } openRows.has(c.path) ? openRows.delete(c.path) : openRows.add(c.path); renderCleanup(); };
   row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
@@ -1037,6 +1039,28 @@ function listDialog(rows, sub) {
     clr.onclick = () => { picked.clear(); dlg.close(); if (current) renderCleanup(); else renderPickBar(); toast('Di: shortlist cleared', 'du'); };
     dlg.querySelector('.foot').prepend(clr);
   }
+}
+// "27 GB idle of 33 GB" says how much moves but nothing about what. This lists it, grouped by the
+// folder the files sit in, because the leaves are often content hashes that tell you nothing.
+async function idleFilesDialog(path, name, back) {
+  let files;
+  try { files = await api(`/api/idle?path=${encodeURIComponent(path)}&days=${idleDays}`); } catch (e) { toast(e.message); return; }
+  const groups = new Map();
+  for (const f of files) {
+    const rel = f.path.startsWith(path + '/') ? f.path.slice(path.length + 1) : f.path, parts = rel.split('/');
+    const key = parts.slice(0, Math.min(2, parts.length - 1)).join('/') || rel; // one file at the top level groups under itself
+    const g = groups.get(key) ?? { size: 0, n: 0 };
+    g.size += f.size; g.n++; groups.set(key, g);
+  }
+  const rows = [...groups].sort((a, b) => b[1].size - a[1].size).map(([k, g]) => ({ key: k, name: k, is_dir: g.n > 1, size: g.size, sub: `${g.n} file${g.n === 1 ? '' : 's'} untouched for ${idleDays}+ days` }));
+  const shown = files.reduce((t, f) => t + f.size, 0);
+  openDialog({
+    title: `What would move out of ${name}`,
+    sub: rows.length ? `${fmt(shown)} of it sits in the ${files.length} largest file${files.length === 1 ? '' : 's'}, grouped below. The rest is in files under 1 MB, which move too.`
+      : 'Nothing of 1 MB or more inside this has been idle that long.',
+    rows, select: false,
+    actions: back ? [{ label: () => 'Back to the shortlist', fn: () => listDialog([...picked.values()].map(candRow)) }] : [],
+  });
 }
 async function openShelf() {
   try { shelfList = await api('/api/shelf'); } catch (e) { toast(e.message); return; }
