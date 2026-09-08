@@ -2609,16 +2609,23 @@ async function openSettings() {
     <label><input type="radio" name="ru" value="api"><span>OpenAI-compatible endpoint <small>· no tools, judges from what Di shows${h.ollama ? ' · Ollama found' : ''}</small></span>
       <div class="api"><input name="url" placeholder="URL, e.g. http://127.0.0.1:11434/v1 or https://api.openai.com/v1" spellcheck="false"><input name="model" placeholder="model, e.g. qwen3:8b or gpt-4o-mini" spellcheck="false"><input name="key" type="password" placeholder="${h.key_set ? 'API key (set)' : 'API key, if the endpoint needs one'}"></div></label>
     <label><input type="radio" name="ru" value="none"><span>None <small>· Ru stays greyed out</small></span></label>
+    <div class="where">
+      <b>Where DiMe looks</b>
+      <p>Launched from Finder an app sees almost none of your shell's PATH, so add a folder here if a CLI you have installed shows as not found.</p>
+      <textarea name="path" rows="2" spellcheck="false" placeholder="extra folders, one per line, e.g. ${esc(homePath || '~')}/.local/bin"></textarea>
+      <div class="found">${['claude', 'codex', 'jq'].map((t) => `<span>${t}: ${v.at?.[t] ? `<i>${esc(tilde(v.at[t]))}</i>` : 'not found'}</span>`).join('')}</div>
+      <details><summary>${(v.dirs ?? []).length} folders searched</summary><ol>${(v.dirs ?? []).map((d) => `<li>${esc(tilde(d))}</li>`).join('')}</ol></details>
+    </div>
     <div class="now">Now: ${v.current ? esc(v.current) : 'no AI'}</div>
     <div class="foot"><button class="btn sm quiet" type="button">Cancel</button><button class="btn sm" type="button">Use this</button></div>`;
   gearEl.querySelector(`input[value="${v.mode}"]`)?.removeAttribute('disabled'); (gearEl.querySelector(`input[value="${v.mode}"]`) ?? gearEl.querySelector('input[value="auto"]')).checked = true;
-  gearEl.querySelector('[name=url]').value = h.url; gearEl.querySelector('[name=model]').value = h.model;
+  gearEl.querySelector('[name=url]').value = h.url; gearEl.querySelector('[name=model]').value = h.model; gearEl.querySelector('[name=path]').value = v.path ?? '';
   const apiBox = gearEl.querySelector('.api'), sync = () => apiBox.classList.toggle('on', gearEl.querySelector('input[name=ru]:checked')?.value === 'api'); sync();
   for (const r of gearEl.querySelectorAll('input[name=ru]')) r.onchange = sync;
   gearEl.querySelector('.x').onclick = () => gearEl.close(); gearEl.querySelector('.foot .quiet').onclick = () => gearEl.close();
   gearEl.querySelector('.foot .btn:not(.quiet)').onclick = async () => {
     const mode = gearEl.querySelector('input[name=ru]:checked')?.value ?? 'auto';
-    try { const r = await api('/api/ru', { mode, url: gearEl.querySelector('[name=url]').value.trim(), model: gearEl.querySelector('[name=model]').value.trim(), key: gearEl.querySelector('[name=key]').value }); applyRu(r.current); toast(r.current ? `Ru: thinking with ${r.current}` : 'Ru: no AI, greyed out', 'ru'); gearEl.close(); }
+    try { const r = await api('/api/ru', { mode, url: gearEl.querySelector('[name=url]').value.trim(), model: gearEl.querySelector('[name=model]').value.trim(), path: gearEl.querySelector('[name=path]').value.trim(), key: gearEl.querySelector('[name=key]').value }); applyRu(r.current); toast(r.current ? `Ru: thinking with ${r.current}` : 'Ru: no AI, greyed out', 'ru'); gearEl.close(); }
     catch (e) { toast(`Settings: ${e.message}`); }
   };
   gearEl.showModal();

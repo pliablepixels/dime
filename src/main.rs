@@ -77,7 +77,8 @@ fn in_bundle() -> bool {
 /// /usr/bin:/bin and nothing else. Add the usual install folders, and inside a bundle also ask the
 /// login shell what its PATH really is. The inherited PATH stays first so a deliberate choice wins.
 fn widen_path() {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").iter().flat_map(std::env::split_paths).collect();
+    let mut dirs: Vec<PathBuf> = ru::load_settings().path.split(['\n', ':']).map(str::trim).filter(|d| !d.is_empty()).map(PathBuf::from).collect();
+    dirs.extend(std::env::var_os("PATH").iter().flat_map(std::env::split_paths));
     if in_bundle() {
         if let Ok(shell) = std::env::var("SHELL") {
             if let Ok(out) = std::process::Command::new(shell).args(["-lc", "printf %s \"$PATH\""]).output() {
@@ -830,7 +831,9 @@ async fn ask(State(app): State<Shared>, Json(req): Json<AskReq>) -> Result<axum:
 fn ru_view(app: &App) -> serde_json::Value {
     let cfg = ru::load_settings();
     let r = app.ru.lock().unwrap();
-    serde_json::json!({ "mode": if cfg.mode.is_empty() { "auto" } else { cfg.mode.as_str() }, "current": if matches!(r.provider, ru::Provider::None) { serde_json::Value::Null } else { serde_json::Value::String(r.label.clone()) }, "have": ru::available(&cfg) })
+    serde_json::json!({ "mode": if cfg.mode.is_empty() { "auto" } else { cfg.mode.as_str() }, "current": if matches!(r.provider, ru::Provider::None) { serde_json::Value::Null } else { serde_json::Value::String(r.label.clone()) }, "have": ru::available(&cfg),
+        "path": cfg.path, "dirs": ru::search_dirs(),
+        "at": serde_json::json!({ "claude": ru::found_at("claude"), "codex": ru::found_at("codex"), "jq": ru::found_at("jq") }) })
 }
 async fn ru_get(State(app): State<Shared>) -> Json<serde_json::Value> {
     Json(ru_view(&app))
@@ -840,6 +843,7 @@ async fn ru_set(State(app): State<Shared>, Json(cfg): Json<ru::Settings>) -> Res
         return Err(bad("mode must be auto, claude, codex, api or none"));
     }
     ru::save_settings(&cfg).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    widen_path(); // folders just added must count immediately, without a restart
     *app.ru.lock().unwrap() = ru::detect(&cfg);
     Ok(Json(ru_view(&app)))
 }

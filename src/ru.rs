@@ -18,6 +18,19 @@ pub struct Settings {
     pub model: String,
     #[serde(default)]
     pub key: String,
+    /// Extra folders to look in for the CLIs, one per line or colon separated. A GUI launch sees
+    /// almost nothing of the user's PATH, so this is the escape hatch when the guesses miss.
+    #[serde(default)]
+    pub path: String,
+}
+/// Folders the CLIs are looked for in, in order. Shown in the gear so a miss is diagnosable.
+pub fn search_dirs() -> Vec<String> {
+    std::env::var_os("PATH").iter().flat_map(std::env::split_paths).map(|d| d.display().to_string()).collect()
+}
+/// Where a tool actually resolves to, or None. Lets the gear say more than "not found".
+pub fn found_at(tool: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|d| d.join(tool)).find(|p| p.is_file()).map(|p| p.display().to_string())
 }
 fn settings_file() -> PathBuf {
     crate::shelf::dir().parent().unwrap().join("settings.json")
@@ -109,11 +122,16 @@ fn cmd_of(c: &str) -> String {
 }
 
 /// Run one question. Returns the readable half of a pipe carrying the event stream; dropping it ends the run.
+/// Shown when the chosen CLI is set but nowhere on the search path, which is what a launch from
+/// Finder looks like: the app sees almost nothing of the user's shell PATH.
+const MISSING_CLI: &str = "`{}` is chosen but DiMe cannot find it. Open the gear to see the folders it searches, add the one holding `{}`, or pick something else.";
 pub fn ask(ru: &Ru, system: String, prompt: String, root: PathBuf, path_env: String) -> Result<DuplexStream, String> {
     let (mut w, r) = tokio::io::duplex(1 << 16);
     let label = ru.label.clone();
     match &ru.provider {
         Provider::None => return Err("Ru has no AI to think with. Install the Claude Code CLI or Codex and log in once, run Ollama, or pick an endpoint in the gear menu.".into()),
+        Provider::Claude if !have("claude") => return Err(MISSING_CLI.replace("{}", "claude")),
+        Provider::Codex if !have("codex") => return Err(MISSING_CLI.replace("{}", "codex")),
         Provider::Claude => { tokio::spawn(async move { let e = claude(&mut w, &label, system, prompt, root, path_env).await; finish(&mut w, e).await; }); }
         Provider::Codex => { tokio::spawn(async move { let e = codex(&mut w, &label, system, prompt, root, path_env).await; finish(&mut w, e).await; }); }
         Provider::Api { url, key, model } => {
