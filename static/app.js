@@ -15,6 +15,9 @@ const api = async (url, body) => {
 };
 const fmt = (b) => { const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++; } return (i ? b.toFixed(b < 10 ? 1 : 0) : b) + ' ' + u[i]; };
 const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n);
+// While a scan runs the total is shown in whole megabytes: gigabytes tick over far too slowly to read as progress.
+// Once it finishes, fmt takes over and picks the unit that fits.
+const fmtScan = (b) => b < (1 << 20) ? fmt(b) : Math.round(b / (1 << 20)).toLocaleString() + ' MB';
 const ageDays = (n) => Math.max(0, Math.floor((Date.now() / 1000 - Math.max(n.atime, n.mtime)) / 86400));
 const fmtAge = (d) => d === 0 ? 'used today' : d < 30 ? `${d}d idle` : d < 365 ? `${Math.round(d / 30)}mo idle` : `${(d / 365).toFixed(1)}y idle`;
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1250,7 +1253,7 @@ async function watchScan() {
     const s = await api('/api/status');
     if (s.state === 'done') return s;
     if (s.state !== 'scanning') throw new Error('scan stopped');
-    $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmt(s.size)}`;
+    $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmtScan(s.size)}`;
     if (mode === 'disk') { setBlocks(entriesFor(s.live, { live: true })); crewAssign(s.live); }
     await sleep(120);
   }
