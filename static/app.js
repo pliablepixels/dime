@@ -568,37 +568,64 @@ function updateEscort(dt, now) {
 // motion is the characterisation.
 const guru = { g: null, x: 40, z: 40, y: 40, vx: 0, vz: 0, key: null, want: false, glow: 0, busy: false, rings: [] };
 const RU_TILT = 32 * Math.PI / 180; // the ±32° of the two orbit paths on the landing button
+// The landing button draws Ru as a stroked line figure in a 40x48 box: a head, the arc of the
+// shoulders, the sweep of the robe, a ground line, and a four-pointed spark above. These are those
+// exact paths, traced as tubes so they keep the stroke weight, and the whole thing turns to face the
+// camera so it reads as the logo from any angle while still sitting in the scene's perspective.
+const RU_S = 0.17, RU_W = RU_S * 0.95; // SVG units to world units; the logo strokes at width 2, so the tube radius is ~1 SVG unit
+const ruPt = (x, y) => new THREE.Vector3((x - 20) * RU_S, (30 - y) * RU_S, 0);
+const cubic = (p0, c1, c2, p3, n = 14) => Array.from({ length: n + 1 }, (_, i) => {
+  const t = i / n, u = 1 - t;
+  return new THREE.Vector3(
+    u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p3.x,
+    u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p3.y, 0);
+});
+function ruStroke(pts, mat, r = RU_W, closed = false) {
+  const curve = new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
+  return new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(16, pts.length * 3), r, 6, closed), mat);
+}
 function makeSage() {
   const g = new THREE.Group();
-  const skin = (o) => new THREE.MeshStandardMaterial({ color: '#C9B3FF', roughness: 0.4, metalness: 0.2, transparent: true, opacity: o, flatShading: true });
-  const robe = new THREE.Mesh(new THREE.ConeGeometry(2.5, 4.4, 6), skin(0.42)); robe.position.y = 0.4; g.add(robe);
-  const hem = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 6, 24), skin(0.7)); hem.rotation.x = Math.PI / 2; hem.position.y = -1.7; g.add(hem);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(1.05, 16, 12), skin(0.75)); head.position.y = 3.4; g.add(head);
-  const arms = new THREE.Mesh(new THREE.TorusGeometry(1.75, 0.14, 6, 20, Math.PI), skin(0.7)); // the sweep of the sleeves
-  arms.rotation.set(Math.PI / 2, 0, Math.PI); arms.position.y = 0.5; g.add(arms);
-  const spark = new THREE.Mesh(new THREE.OctahedronGeometry(0.62, 0), new THREE.MeshBasicMaterial({ color: '#F1E9FF' })); spark.position.y = 5.4; g.add(spark);
-  const core = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 10), new THREE.MeshBasicMaterial({ color: '#F1E9FF', transparent: true, opacity: 0.9 })); core.position.y = 0.6; g.add(core);
-  const light = new THREE.PointLight('#C9B3FF', 40, 90, 2); light.position.y = 1; g.add(light);
-  // two crossed orbits with a bead on each, the periods taken from the landing animation
+  const ink = new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 1, fog: false, toneMapped: false }); // no fog, so the line work stays as crisp as the logo it copies
+  const parts = new THREE.Group(); g.add(parts);
+
+  // circle cx=20 cy=13 r=5.5
+  parts.add(ruStroke(Array.from({ length: 28 }, (_, i) => { const a = (i / 28) * Math.PI * 2; return ruPt(20 + Math.cos(a) * 5.5, 13 + Math.sin(a) * 5.5); }), ink, RU_W, true));
+  // M12 30 c0-6 3.5-10 8-10 s8 4 8 10   (shoulders)
+  parts.add(ruStroke([...cubic(ruPt(12, 30), ruPt(12, 24), ruPt(15.5, 20), ruPt(20, 20)),
+                      ...cubic(ruPt(20, 20), ruPt(24.5, 20), ruPt(28, 24), ruPt(28, 30))], ink));
+  // M6 36 c4-3 9-4 14-4 s10 1 14 4      (the robe sweeping out)
+  parts.add(ruStroke([...cubic(ruPt(6, 36), ruPt(10, 33), ruPt(15, 32), ruPt(20, 32)),
+                      ...cubic(ruPt(20, 32), ruPt(25, 32), ruPt(30, 33), ruPt(34, 36))], ink));
+  parts.add(ruStroke([ruPt(4, 40), ruPt(36, 40)], ink));   // M4 40 h32   (the ground)
+  parts.add(ruStroke([ruPt(20, 32), ruPt(20, 36)], ink));  // M20 32 v4
+  // the four-pointed spark above the head
+  const spark = ruStroke([ruPt(20, 1.5), ruPt(21.2, 4.3), ruPt(24, 5.5), ruPt(21.2, 6.7), ruPt(20, 9.5), ruPt(18.8, 6.7), ruPt(16, 5.5), ruPt(18.8, 4.3)], ink, RU_W, true);
+  g.add(spark);
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 10), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.035, blending: THREE.AdditiveBlending, depthWrite: false }));
+  core.position.set(0, ruPt(20, 24).y, -1.4); g.add(core); // behind the line work, the way the logo's glow sits behind it
+  const light = new THREE.PointLight('#C9B3FF', 40, 90, 2); light.position.y = 0.4; g.add(light);
+
+  // the two orbit paths, rx 44 ry 16 at the logo's own tilts, with a bead running each
   const rings = [];
   for (const [tilt, period, phase] of [[-RU_TILT, 7, 0], [RU_TILT, 9.5, 4]]) {
-    const rg = new THREE.Group(); rg.rotation.set(Math.PI / 2 - 0.42, 0, tilt);
-    const path = new THREE.Mesh(new THREE.TorusGeometry(5.4, 0.05, 6, 96), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.3 }));
-    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 8), new THREE.MeshBasicMaterial({ color: '#C9B3FF' }));
-    rg.add(path, bead); g.add(rg);
-    rings.push({ bead, period, phase });
+    const rg = new THREE.Group(); rg.rotation.z = tilt; g.add(rg);
+    const RX = 44 * RU_S * 0.72, RY = RX * (16 / 44); // the logo's own 44 by 16 ellipse
+    rg.add(ruStroke(Array.from({ length: 40 }, (_, i) => { const a = (i / 40) * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * RX, Math.sin(a) * RY, 0); }),
+      new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.42, fog: false, toneMapped: false }), RU_W * 0.6, true));
+    const bead = new THREE.Mesh(new THREE.SphereGeometry(RU_W * 2.6, 10, 8), new THREE.MeshBasicMaterial({ color: '#C9B3FF', fog: false, toneMapped: false }));
+    rg.add(bead); rings.push({ bead, period, phase, RX, RY });
   }
   const halo = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), new THREE.MeshBasicMaterial({ map: poolTex(), color: '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
   halo.rotation.x = -Math.PI / 2; scene.add(halo);
-  // the arrival: a soft bloom and two rings that travel outward once, then never again until it leaves
   const aura = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
   g.add(aura);
   const arcs = [0, 1].map(() => {
     const r = new THREE.Mesh(new THREE.RingGeometry(0.88, 1, 64), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
-    r.rotation.x = -Math.PI / 2; g.add(r); return r;
+    g.add(r); return r;
   });
   scene.add(g);
-  Object.assign(guru, { g, robe, head, spark, core, light, halo, rings, aura, arcs, arrive: 0 });
+  Object.assign(guru, { g, robe: ink, head: parts, spark, core, light, halo, rings, aura, arcs, arrive: 0 });
 }
 /// Send Ru to hover over one item on the map. Null lets it drift back out.
 function ruLookAt(key) { guru.key = key ?? null; if (key) ruShow(true); }
@@ -622,7 +649,7 @@ function updateRuBody(dt, now) {
     guru.y = smooth(guru.y, ty, 1 - Math.exp(-dt * 1.4));
   }
   guru.g.position.set(guru.x, guru.y, guru.z);
-  guru.g.rotation.y += dt * (REDUCED ? 0 : 0.16); // it turns slowly to face the room
+  guru.g.quaternion.copy(camera.quaternion); // always square to the camera, so it stays the logo
   // arriving: it gathers itself out of a bloom of light rather than simply appearing
   if (guru.arrive < 1) {
     guru.arrive = Math.min(1, guru.arrive + dt / 1.7);
@@ -640,14 +667,13 @@ function updateRuBody(dt, now) {
   // the light breathes, and quickens while Ru is working
   const beat = guru.busy ? 0.55 + 0.45 * Math.sin(now / 260) : 0.6 + 0.25 * Math.sin(now / 1500);
   guru.glow = smooth(guru.glow, beat, REDUCED ? 1 : 1 - Math.exp(-dt * 6));
-  guru.core.scale.setScalar(0.8 + guru.glow * 0.4);
+  guru.core.scale.setScalar(2.6 + guru.glow * 1.2); // a soft breath behind the strokes, like the logo's own glow
   guru.light.intensity = 25 + guru.glow * (guru.busy ? 130 : 55);
-  guru.robe.material.opacity = 0.34 + guru.glow * 0.14;
-  guru.spark.rotation.y += dt * 1.6; guru.spark.rotation.x += dt * 1.1;
-  guru.spark.scale.setScalar(0.8 + guru.glow * 0.5);
+  guru.robe.opacity = 0.85 + guru.glow * 0.15;
+  guru.spark.scale.setScalar(0.85 + guru.glow * 0.35); // the spark above the head breathes with the light
   for (const r of guru.rings) {
     const a = REDUCED ? 0 : ((now / 1000 + r.phase) / r.period) * Math.PI * 2;
-    r.bead.position.set(Math.cos(a) * 5.4, Math.sin(a) * 5.4, 0);
+    r.bead.position.set(Math.cos(a) * r.RX, Math.sin(a) * r.RY, 0);
     r.bead.visible = !REDUCED;
   }
   const near = m && Math.hypot(tx - guru.x, tz - guru.z) < 6;
@@ -2520,6 +2546,8 @@ function ruSuggest() {
   const b = document.createElement('button'); b.type = 'button'; b.textContent = q; b.onclick = () => ruAsk(q); el.appendChild(b);
 }
 async function ruOpen(area) {
+  // summoned: it gathers itself out of a bloom of light, every time, not only the first
+  ruShow(true); guru.arrive = 0;
   ru.open = true; ruEl.hidden = false; document.body.classList.add('ru-open'); hideMenu(); tip.hidden = true;
   try { shelfList = await api('/api/shelf'); } catch {}
   if (area) { ru.area = area; ru.pinned = true; }
