@@ -2279,6 +2279,17 @@ function verdictRows(paths) {
 // Ru answers with {go, keep}. It never picks a destination: "go" only puts things on the shortlist,
 // "keep" takes them back off it when Di put them there. Older replies split go into archive/delete.
 const goPaths = (v) => [...new Set([...(v.go ?? []), ...(v.archive ?? []), ...(v.delete ?? [])])];
+/// Fill in sizes for rows Di never flagged, so the shortlist does not show them as 0 B.
+async function sizeUp(rows) {
+  const need = rows.filter((r) => !r.size);
+  for (const parent of new Set(need.map((r) => parentOf(r.key)))) {
+    try {
+      const t = await api(`/api/tree?path=${encodeURIComponent(parent)}&depth=1`);
+      const by = new Map((t.children ?? []).map((c) => [c.path, c]));
+      for (const r of need) { const c = by.get(r.key); if (c) { r.size = c.size; r.is_dir = c.is_dir; } }
+    } catch {}
+  }
+}
 function renderVerdict(m, v) {
   const box = document.createElement('div'); box.className = 'verdict';
   const groups = [['Can go', 'ru', goPaths(v)], ['Keep', 'quiet', v.keep ?? []]].filter(([, , paths]) => paths.length);
@@ -2289,12 +2300,17 @@ function renderVerdict(m, v) {
   // One button for the whole verdict: what Ru says can go joins the shortlist, what it says to keep
   // leaves it. Only the items that would actually change are counted, so the button is never a no-op.
   const [goRows, outside] = verdictRows(goPaths(v)), [keepRows] = verdictRows(v.keep);
-  const add = goRows.filter((r) => !picked.has(r.key)), drop = keepRows.filter((r) => picked.has(r.key));
-  // always the same action, whichever way the verdict happens to fall: apply what Ru decided
+  const add = goRows.filter((r) => !picked.has(r.key));
+  // A keep is only kept if nothing on the shortlist still covers it. Ru usually names folders inside
+  // one that Di flagged whole, and leaving that parent listed would move the kept item along with it,
+  // so the parent has to go and the items Ru cleared take its place.
+  const covers = (entry, path) => entry === path || path.startsWith(entry + '/');
+  const drop = [...picked.keys()].filter((k) => keepRows.some((r) => covers(k, r.key)));
   const label = `Modify shortlist · ${[add.length && `add ${add.length}`, drop.length && `drop ${drop.length}`].filter(Boolean).join(', ')}`;
-  if (add.length || drop.length) mk(label, 'ru', () => {
+  if (add.length || drop.length) mk(label, 'ru', async () => {
+    for (const k of drop) picked.delete(k);
+    await sizeUp(add); // Ru can name things Di never flagged, which arrive here with no size on them
     for (const r of add) picked.set(r.key, { path: r.key, name: r.name, size: r.size, is_dir: r.is_dir, tier: 'review', reason: 'ru', what: 'Ru said it can go', note: 'Ru checked this one.', age_days: 0 });
-    for (const r of drop) picked.delete(r.key);
     if (current) renderCleanup(); else renderPickBar();
     toast(`Di: shortlist ${[add.length && `+${add.length}`, drop.length && `-${drop.length}`].filter(Boolean).join(' ')}`, 'du');
     if (picked.size) listDialog([...picked.values()].map(candRow));
