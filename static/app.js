@@ -590,8 +590,15 @@ function makeSage() {
   }
   const halo = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), new THREE.MeshBasicMaterial({ map: poolTex(), color: '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
   halo.rotation.x = -Math.PI / 2; scene.add(halo);
+  // the arrival: a soft bloom and two rings that travel outward once, then never again until it leaves
+  const aura = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(aura);
+  const arcs = [0, 1].map(() => {
+    const r = new THREE.Mesh(new THREE.RingGeometry(0.88, 1, 64), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    r.rotation.x = -Math.PI / 2; g.add(r); return r;
+  });
   scene.add(g);
-  Object.assign(guru, { g, robe, head, spark, core, light, halo, rings });
+  Object.assign(guru, { g, robe, head, spark, core, light, halo, rings, aura, arcs, arrive: 0 });
 }
 /// Send Ru to hover over one item on the map. Null lets it drift back out.
 function ruLookAt(key) { guru.key = key ?? null; if (key) ruShow(true); }
@@ -616,6 +623,20 @@ function updateRuBody(dt, now) {
   }
   guru.g.position.set(guru.x, guru.y, guru.z);
   guru.g.rotation.y += dt * (REDUCED ? 0 : 0.16); // it turns slowly to face the room
+  // arriving: it gathers itself out of a bloom of light rather than simply appearing
+  if (guru.arrive < 1) {
+    guru.arrive = Math.min(1, guru.arrive + dt / 1.7);
+    const u = guru.arrive, ease = 1 - Math.pow(1 - u, 3);
+    guru.g.scale.setScalar(REDUCED ? 1 : 0.3 + 0.7 * ease + Math.sin(u * Math.PI) * 0.1); // a breath of overshoot, then settles
+    guru.aura.scale.setScalar(1 + ease * 12);
+    guru.aura.material.opacity = REDUCED ? 0 : 0.45 * Math.pow(1 - u, 1.7);
+    guru.arcs.forEach((r, i) => {
+      const v = Math.max(0, Math.min(1, u * 1.6 - i * 0.3));
+      r.scale.setScalar(0.6 + v * 15);
+      r.material.opacity = REDUCED ? 0 : 0.5 * (1 - v) * (v > 0 ? 1 : 0);
+    });
+    if (guru.arrive >= 1) { guru.g.scale.setScalar(1); guru.aura.material.opacity = 0; for (const r of guru.arcs) r.material.opacity = 0; }
+  }
   // the light breathes, and quickens while Ru is working
   const beat = guru.busy ? 0.55 + 0.45 * Math.sin(now / 260) : 0.6 + 0.25 * Math.sin(now / 1500);
   guru.glow = smooth(guru.glow, beat, REDUCED ? 1 : 1 - Math.exp(-dt * 6));
@@ -825,6 +846,7 @@ const SPACE_BG = new THREE.Color('#0D1321'), EARTH_FOG = new THREE.Color('#1C1A3
 function updateWorld(dt, now) {
   const earth = mode !== 'mem';
   sky.visible = earth; skyline.visible = earth; dust.visible = !earth;
+  ground.visible = earth; grid.visible = earth; // Me flies in space: no city floor under the orbit
   scene.fog.color.copy(earth ? EARTH_FOG : SPACE_BG); scene.background = earth ? null : SPACE_BG;
   if (earth) for (const b of skyline.children) if (b.userData.phase != null) b.visible = Math.sin(now / 600 + b.userData.phase) > 0.3;
 }
@@ -838,8 +860,12 @@ for (let i = 0; i < 14; i++) for (let j = 0; j < 9; j++) {
 }
 let idleLevel = 1, started = false; // idle field eases out once a scan starts and never returns
 function updateIdle(dt, now) {
+  // the landing's own decoration: it must not be left standing behind Di's map or Me's orbit
+  const want = !started && !$('#landing').hidden && !$('#landing').classList.contains('away');
+  if (want) idle.visible = true;
   if (!idle.visible) return;
-  idleLevel = REDUCED ? (started ? 0 : 1) : smooth(idleLevel, started ? 0 : 1, 1 - Math.exp(-dt * 3));
+  const snap = REDUCED || mode === 'mem'; // it belongs to the landing, so in Me's space it just goes
+  idleLevel = snap ? (want ? 1 : 0) : smooth(idleLevel, want ? 1 : 0, 1 - Math.exp(-dt * 3));
   idleMat.opacity = idleLevel;
   for (const m of idle.children) {
     const [i, j] = m.userData.p;
@@ -1721,7 +1747,7 @@ let last = performance.now(), spinUntil = 0;
 renderer.setAnimationLoop((now) => {
   // the camera only turns on its own while Di is scanning, or for the short reveal spin afterwards
   if (mode === 'disk' && started) controls.autoRotate = !REDUCED && ((scanning && !rotHold) || now < spinUntil);
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now; // never negative: a backwards clock would make every eased value diverge instead of settle
   if (flyHome) { camera.position.lerp(HOME_CAM, REDUCED ? 1 : 1 - Math.exp(-dt * 3)); if (camera.position.distanceTo(HOME_CAM) < 0.5) flyHome = false; }
   updateCamera(dt, now);
   controls.update();
@@ -2050,6 +2076,23 @@ const R_CORE = 11, R_RIM = 72;
 const COL_COOL = new THREE.Color('#3B6FB6'), COL_WARM = new THREE.Color('#8A5BC7'), COL_HOT2 = new THREE.Color('#FF7A3D');
 const cpuColor = (t) => t < 0.5 ? new THREE.Color().lerpColors(COL_COOL, COL_WARM, t * 2) : new THREE.Color().lerpColors(COL_WARM, COL_HOT2, (t - 0.5) * 2);
 const orbGeo = new THREE.SphereGeometry(1, 32, 20);
+// A satellite's parts share the orb's own material, so colour, fading and visibility all follow it
+// for free, and cost nothing extra per process.
+const armGeo = new THREE.BoxGeometry(1.7, 0.1, 0.1), panelGeo = new THREE.BoxGeometry(2.1, 0.08, 1.25), dishGeo = new THREE.CylinderGeometry(0.5, 0.16, 0.4, 12, 1, true);
+// panels get their own colour so they do not melt into the body they hang off
+const panelMat = new THREE.MeshStandardMaterial({ color: '#1B2A4A', emissive: '#3B6FB6', emissiveIntensity: 0.35, roughness: 0.45, metalness: 0.35 });
+const RIG_RSS = 200 << 20; // anything holding this much gets the full rig; the long tail stays a mote
+function rigSatellite(o) {
+  if (o.rig || !o.p || o.p.rss < RIG_RSS) return;
+  const mat = o.m.material;
+  for (const sx of [-1, 1]) {
+    const arm = new THREE.Mesh(armGeo, mat); arm.position.x = sx * 1.5; o.m.add(arm);
+    const pan = new THREE.Mesh(panelGeo, panelMat); pan.position.x = sx * 3.3; o.m.add(pan); o.panels ??= []; o.panels.push(pan);
+  }
+  const mast = new THREE.Mesh(armGeo, mat); mast.rotation.z = Math.PI / 2; mast.scale.set(0.55, 1, 1); mast.position.y = 1.35; o.m.add(mast);
+  const dish = new THREE.Mesh(dishGeo, mat); dish.position.y = 1.95; o.m.add(dish); o.dish = dish;
+  o.rig = true;
+}
 const trailMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
 const TRAIL_N = 28;
 
@@ -2101,6 +2144,7 @@ function orbitSync() {
       orbit.orbs.set(p.pid, o);
     }
     o.p = p; o.f = f; o.dying = false; o.ghost = !shown.has(p.pid);
+    rigSatellite(o);
     o.rt = R_CORE + 2 + (1 - f) * (R_RIM - R_CORE - 2);
     o.sizeT = 1.1 + 6.5 * Math.cbrt(p.rss / maxRss);
     o.col = cpuColor(f);
@@ -2143,6 +2187,12 @@ function updateOrbit(dt, now) {
     o.x = smooth(o.x, o.tx, 1 - Math.exp(-dt * 8)); o.z = smooth(o.z, o.tz, 1 - Math.exp(-dt * 8));
     const y = o.size + 0.3 + Math.sin(now / 1100 + o.pid) * 0.25;
     o.m.position.set(o.x, y, o.z); o.m.scale.setScalar(Math.max(0.05, o.size));
+    if (o.rig) {
+      o.m.rotation.y = Math.atan2(-o.z, o.x) + Math.PI / 2; // panels face the core, as they would the sun
+      const work = Math.min(1, (o.p?.cpu ?? 0) / 60);
+      if (!REDUCED) o.dish.rotation.z = Math.sin(now / 600 + o.ang) * (0.15 + work * 0.5);
+      for (const pan of o.panels) pan.rotation.x = REDUCED ? 0 : Math.sin(now / 1700 + o.ang) * 0.22;
+    }
     if (o.dying) {
       o.m.material.opacity = Math.max(0, o.m.material.opacity - dt * 1.2);
       if (o.m.material.opacity <= 0.01 && o.r > R_RIM + 30) { orbit.group.remove(o.m, o.trail); o.m.material.dispose(); o.trail.geometry.dispose(); o.lbl.element.remove(); orbit.orbs.delete(o.pid); }
