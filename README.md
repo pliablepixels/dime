@@ -10,15 +10,17 @@ Di digs through your disk. Me watches your memory. Ru says what can go. Three ex
 
 macOS only (it leans on FSEvents, nettop, lsof and IOKit). Apple silicon or Intel.
 
-**Download**: grab `dime-<version>-macos.tar.gz` from [Releases](https://github.com/pliablepixels/dime/releases), then
+**Download the app**: grab `DiMe-<version>-macos.zip` from [Releases](https://github.com/pliablepixels/dime/releases), unzip it, drag `DiMe.app` to Applications, and open it. It runs in a window of its own on both Apple silicon and Intel.
+
+The app is signed only ad-hoc, not notarized, so the first launch needs one of:
 
 ```
-tar xzf dime-*-macos.tar.gz && cd dime-*
-xattr -d com.apple.quarantine dime   # unsigned binary; or right-click > Open the first time
-./dime
+xattr -dr com.apple.quarantine /Applications/DiMe.app   # or: right-click the app > Open
 ```
 
-One binary runs on Apple silicon and Intel. Skip to step 3 for Ru.
+**Give it Full Disk Access.** System Settings > Privacy & Security > Full Disk Access, add `DiMe.app`. Without it, protected folders (Mail, Messages, Safari data, other users) quietly measure smaller than they are.
+
+There is a command-line build too, `dime-<version>-macos.tar.gz`, which opens your browser instead of a window. Skip to step 3 for Ru.
 
 **Or build from source**:
 
@@ -31,7 +33,7 @@ One binary runs on Apple silicon and Intel. Skip to step 3 for Ru.
    git clone <this repo> dime && cd dime
    cargo build --release
    ```
-   Everything Rust needs is fetched by cargo. The page loads Three.js from a CDN, so the first open needs internet.
+   Everything Rust needs is fetched by cargo, and Three.js and the webfont ship inside the binary, so nothing is downloaded at runtime. `make app` instead of `cargo build --release` gives you `dist/DiMe.app`.
 3. **Optional, for Ru** (the guru who validates what can go), any one of:
    - the [Claude Code CLI](https://claude.ai/code): install, run `claude` once to log in. Ru gets a read-only tool allowlist.
    - the [Codex CLI](https://github.com/openai/codex): `npm i -g @openai/codex`, run `codex` once to log in. Ru runs in Codex's sandbox: reads everywhere, writes only to a scratch folder.
@@ -42,12 +44,13 @@ One binary runs on Apple silicon and Intel. Skip to step 3 for Ru.
 ## Run
 
 ```
-./target/release/dime        # or ./dime from the download
+open /Applications/DiMe.app  # or just double-click it
+./target/release/dime        # from a shell: serves the same UI and opens your browser
 ```
 
-Opens http://127.0.0.1:4242 in your browser. `DIME_PORT=5000 ./target/release/dime` to use another port. The startup line lists anything optional it could not find.
+The app runs in its own window. From a shell the binary opens http://127.0.0.1:4242 in your browser instead; add `--window` for the app window, or `--browser` inside the bundle to force the browser. `DIME_PORT=5000` picks another port. The startup line lists anything optional it could not find.
 
-**Full Disk Access.** To scan folders macOS protects (Mail, Messages, Safari data, other users), give your terminal app Full Disk Access in System Settings → Privacy & Security. Without it those folders simply show smaller.
+**Full Disk Access.** To scan folders macOS protects (Mail, Messages, Safari data, other users), grant it in System Settings → Privacy & Security → Full Disk Access: add `DiMe.app`, or your terminal app if you run the binary from a shell. Without it those folders simply show smaller.
 
 DiMe keeps its own files in `~/.dime`: the vault (`vault/`), remembered per-root state (`state.json`), the last map of each root (`snapshots/`) and Ru's read-only helper (`bin/di`). Delete the folder to reset everything except what is in the vault, which you should restore or purge from the app first.
 
@@ -85,4 +88,4 @@ min_age_days = 30
 
 All matchers are optional and every one given must hold: `name`, `ext`, `parent_ends_with`, `under` (an ancestor folder's name), `has_child` (names directly inside), `min_size`, `min_age_days`. The header of the built-in file documents each. A broken file is reported on stderr and ignored.
 
-Backend: Rust (axum, rayon, sysinfo, notify). Frontend: one HTML + one JS file, Three.js from CDN, no build step.
+Backend: Rust (axum, rayon, sysinfo, notify), in a WKWebView window via wry. Frontend: one HTML + one JS file, no build step. Three.js and the webfont are vendored under `static/vendor` and baked into the binary, so DiMe never touches the network.

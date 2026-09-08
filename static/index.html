@@ -4,8 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DiMe</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/vendor/font/manrope.css"><!-- vendored, see tools/vendor-font.py -->
 <style>
   :root {
     --bg: #0D1321; --ink: #E8E6DF; --ink-2: #9AA3B8; --ink-3: #5B6680;
@@ -703,9 +702,10 @@
   <dialog id="dlg"></dialog>
   <div id="toast" hidden></div>
 
+  <!-- Three.js ships with DiMe (static/vendor, refreshed by tools/vendor-three.py): no CDN, no network on launch -->
   <script type="importmap">{ "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    "three": "/vendor/three.module.js",
+    "three/addons/": "/vendor/addons/"
   } }</script>
   <script type="module" src="app.js"></script>
 </body>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>                 <string>DiMe</string>
+  <key>CFBundleDisplayName</key>          <string>DiMe</string>
+  <key>CFBundleIdentifier</key>           <string>com.pliablepixels.dime</string>
+  <key>CFBundleExecutable</key>           <string>dime</string>
+  <key>CFBundleIconFile</key>             <string>DiMe</string>
+  <key>CFBundlePackageType</key>          <string>APPL</string>
+  <key>CFBundleShortVersionString</key>   <string>@VERSION@</string>
+  <key>CFBundleVersion</key>              <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>       <string>11.0</string>
+  <key>LSApplicationCategoryType</key>    <string>public.app-category.utilities</string>
+  <key>NSHighResolutionCapable</key>      <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key> <true/>
+
+  <!-- the UI is served from 127.0.0.1, which WKWebView reaches over plain http -->
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>
+
+  <!-- Di maps whatever you point it at; macOS asks before letting it read these -->
+  <key>NSDesktopFolderUsageDescription</key>       <string>DiMe measures what is on your Desktop so it can show it on the map.</string>
+  <key>NSDocumentsFolderUsageDescription</key>     <string>DiMe measures what is in your Documents so it can show it on the map.</string>
+  <key>NSDownloadsFolderUsageDescription</key>     <string>DiMe measures what is in your Downloads so it can flag old installers and archives.</string>
+  <key>NSRemovableVolumesUsageDescription</key>    <string>DiMe maps external drives you ask it to scan.</string>
+  <key>NSFileProviderDomainUsageDescription</key>  <string>DiMe measures files stored in cloud folders without downloading them.</string>
+</dict>
+</plist>

@@ -3,7 +3,9 @@
 ## Build and run
 
 ```sh
-cargo run --release          # http://localhost:4242
+cargo run --release          # serves on http://localhost:4242 and opens your browser
+cargo run --release -- --window   # the same, in the app's own window
+make app                     # dist/DiMe.app, universal, with its icon
 cargo test                   # unit tests, no external services
 ```
 
@@ -22,6 +24,20 @@ The frontend is `static/index.html` and `static/app.js`, served from disk. Edit,
 | `src/snapshot.rs` | Saves the finished tree so the next launch opens instantly |
 | `src/main.rs` | HTTP routes, shared state, reset |
 | `static/app.js` | The whole UI. Sections marked with `// ----` comments |
+| `static/vendor/` | Three.js and the Manrope webfont, vendored so nothing loads from a CDN |
+| `src/assets.rs` | Generated: every file under `static/` baked into the binary |
+| `packaging/`, `tools/` | Icon, `Info.plist`, and the scripts that regenerate them |
+
+The UI is embedded in the binary, but a `static/` folder in the working directory wins for any file it has, so running from the repo picks up your edits with a refresh.
+
+## Regenerating what is generated
+
+```sh
+python3 tools/vendor-three.py   # re-fetch Three.js (bump VERSION in the script first)
+python3 tools/vendor-font.py    # re-fetch the Manrope webfont
+python3 tools/gen-assets.py     # rebuild src/assets.rs; run after adding any file under static/
+make icon                       # redraw packaging/DiMe.icns from tools/make-icon.py
+```
 
 Server owns all state; the UI polls `/api/status` and re-fetches when `version` changes.
 

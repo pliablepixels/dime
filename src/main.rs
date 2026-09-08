@@ -1,3 +1,4 @@
+mod assets;
 mod gunk;
 mod hog;
 mod ru;
@@ -46,12 +47,58 @@ fn bad(msg: impl Into<String>) -> ApiErr {
     (StatusCode::BAD_REQUEST, msg.into())
 }
 
-#[tokio::main]
-async fn main() {
+/// Running from inside DiMe.app rather than from a shell.
+fn in_bundle() -> bool {
+    std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+}
+
+fn main() {
     if std::env::args().any(|a| a == "--rules") {
         print!("{}", rules::BUILTIN); // copy to ~/.dime/rules.toml and edit
         return;
     }
+    let windowed = !std::env::args().any(|a| a == "--browser") && (in_bundle() || std::env::args().any(|a| a == "--window"));
+    // The webview must own the main thread, so the server gets a runtime of its own. `rt` stays alive for the whole run.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let addr = rt.block_on(serve());
+    if windowed {
+        window(&addr); // returns when the window closes
+    } else {
+        let _ = std::process::Command::new("open").arg(format!("http://{addr}")).spawn();
+        std::thread::park();
+    }
+}
+
+/// Opens the app in a WKWebView window of its own. External links go to the default browser.
+fn window(addr: &str) {
+    use tao::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoopBuilder}, window::WindowBuilder};
+    let event_loop = EventLoopBuilder::new().build();
+    let win = WindowBuilder::new()
+        .with_title("DiMe")
+        .with_inner_size(tao::dpi::LogicalSize::new(1440.0, 900.0))
+        .with_min_inner_size(tao::dpi::LogicalSize::new(900.0, 600.0))
+        .build(&event_loop)
+        .unwrap();
+    let _webview = wry::WebViewBuilder::new()
+        .with_url(format!("http://{addr}"))
+        .with_background_color((13, 19, 33, 255)) // the app's own --bg, so there is no white flash while it loads
+        .with_devtools(cfg!(debug_assertions))
+        .with_new_window_req_handler(|url, _features| {
+            let _ = std::process::Command::new("open").arg(url).spawn(); // links to the outside world leave the app
+            wry::NewWindowResponse::Deny
+        })
+        .build(&win)
+        .unwrap();
+    event_loop.run(move |event, _, flow| {
+        *flow = ControlFlow::Wait;
+        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
+            *flow = ControlFlow::Exit;
+        }
+    });
+}
+
+/// Everything the HTTP server needs. Returns the address it is listening on; serving continues in the background.
+async fn serve() -> String {
     // the data folder used to be ~/.dume; carry it over once so the vault, state and snapshots survive the rename
     if let Ok(h) = std::env::var("HOME") {
         let (old, new) = (PathBuf::from(&h).join(".dume"), PathBuf::from(&h).join(".dime"));
@@ -124,20 +171,23 @@ async fn main() {
         Some(label) => println!("  Ru answers via {label}"),
     }
     if !have("jq") { println!("  note: `jq` not found on PATH; Ru uses it to trim Di's JSON. `brew install jq`."); }
-    let _ = std::process::Command::new("open").arg(format!("http://{addr}")).spawn();
-    axum::serve(listener, router).await.unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    addr
 }
 
-/// The UI is built into the binary. While developing, a `static/` folder in the working directory wins, so edit-and-refresh keeps working.
+/// The UI is built into the binary (see assets.rs). While developing, a `static/` folder in the
+/// working directory wins for any file it has, so edit-and-refresh keeps working.
 async fn static_file(uri: axum::http::Uri) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let (name, mime, built_in) = match uri.path() {
-        "/" | "/index.html" => ("index.html", "text/html; charset=utf-8", include_str!("../static/index.html")),
-        "/app.js" => ("app.js", "text/javascript; charset=utf-8", include_str!("../static/app.js")),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+    let path = match uri.path() {
+        "/" => "/index.html",
+        p => p,
     };
-    let body = std::fs::read_to_string(PathBuf::from("static").join(name)).unwrap_or_else(|_| built_in.to_string());
-    ([(axum::http::header::CONTENT_TYPE, mime)], body).into_response()
+    let Some((_, mime, built_in)) = assets::FILES.iter().find(|(p, ..)| *p == path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let on_disk = std::fs::read(PathBuf::from("static").join(path.trim_start_matches('/')));
+    ([(axum::http::header::CONTENT_TYPE, *mime)], on_disk.unwrap_or_else(|_| built_in.to_vec())).into_response()
 }
 
 async fn home() -> Json<serde_json::Value> {
