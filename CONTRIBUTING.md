@@ -45,6 +45,8 @@ Server owns all state; the UI polls `/api/status` and re-fetches when `version` 
 
 Most contributions are rules. Edit `src/rules.toml`, no Rust needed. Order matters: first match wins, and a matched folder is not searched inside. Put specific rules above general ones. Every field is documented at the top of that file. Test it locally first as `~/.dime/rules.toml`, then move it into the built-in file.
 
+Match the level where the removable thing actually lives. A folder like `node_modules` is one unit, because one command recreates the whole of it. A folder like `iOS DeviceSupport` is not: each child is a separate OS version, created and removed on its own. For the second kind, give the rule `parent_ends_with` and no `name`, so it matches each child and leaves the folder holding them alone. Nothing can work this out from the filesystem, so the rule has to say which kind it is.
+
 Something the matchers cannot express (needs state across the walk, like duplicates): add a matcher field to `Rule` in `src/rules.rs` and honour it in `Rule::matches`, or add a built-in pass in `gunk::walk`. Add a case to the test in `rules.rs`.
 
 ## Adding a Ru provider

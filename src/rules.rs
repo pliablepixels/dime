@@ -162,6 +162,21 @@ min_size = "1 MB"
         assert!(m.iter().all(|r| r.id != "downloads"));
         assert!(m.iter().find(|r| r.matches(&dl)).is_none_or(|r| r.id != "downloads"));
 
+        // a rule with parent_ends_with and no name flags each child, and leaves the folder holding
+        // them unmatched so the walk keeps going: that is what stops a 34 GB all-or-nothing row
+        let holder = item("iOS DeviceSupport", true, 34 << 30, 400, "Library/Developer/Xcode");
+        assert!(b.iter().find(|r| r.matches(&holder)).is_none(), "the folder itself must stay unflagged");
+        let version = item("iPhone15,2 17.3 (21D50)", true, 6 << 30, 400, "Library/Developer/Xcode/iOS DeviceSupport");
+        assert_eq!(b.iter().find(|r| r.matches(&version)).unwrap().id, "devicesupport");
+        let sim = item("AAAA-1111", true, 3 << 30, 400, "Library/Developer/CoreSimulator/Devices");
+        assert_eq!(b.iter().find(|r| r.matches(&sim)).unwrap().id, "simulator-device");
+        // matched even when it looks freshly used, so the walk stops here instead of wandering inside
+        let fresh = item("iPhone18,2 26.6 (23G71)", true, 6 << 30, 0, "Library/Developer/Xcode/iOS DeviceSupport");
+        assert_eq!(b.iter().find(|r| r.matches(&fresh)).unwrap().id, "devicesupport");
+        // a runtime image is claimed before the generic disk-image rule, which would give the wrong advice
+        let dmg = item("A088375A.dmg", false, 7 << 30, 400, "Library/Developer/CoreSimulator/Images");
+        assert_eq!(b.iter().find(|r| r.matches(&dmg)).unwrap().id, "simruntime");
+
         assert!(merge("[[rule]]\nid=\"x\"\ntier=\"nope\"\nwhat=\"\"\nnote=\"\"").unwrap_err().contains("tier"));
         assert!(merge("[[rule]]\nid=\"x\"\ntier=\"safe\"\nwhat=\"\"\nnote=\"\"\nbogus=1").is_err());
         assert_eq!(parse_size("20 MB"), Some(20 << 20));

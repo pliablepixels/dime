@@ -14,6 +14,8 @@
 #   name               exact names, any of
 #   ext                file extensions, any of (lower-case, no dot)
 #   parent_ends_with   the folder holding it ends with this path, e.g. "Developer/Xcode"
+#                      with no `name`, this matches every child of that folder, which is how you flag
+#                      one OS version or one simulator instead of the whole tree that holds them
 #   under              some ancestor folder has this name, e.g. "Downloads"
 #   has_child          the folder directly contains one of these names
 #   min_size           "20 MB", "1 GB" or bytes; items under 1 MB are never listed
@@ -43,14 +45,34 @@ weight = 2.5
 dir = true
 name = ["Caches", ".cache", "CachedData", "Code Cache", "GPUCache", "Cache", "ShaderCache"]
 
+# The two rules below match the *children* of a folder rather than the folder itself, because that is
+# where the removable thing lives: one OS version, one simulator. Flagging the folder holding them
+# would offer tens of gigabytes as a single all-or-nothing row, and would also stop the walk from ever
+# reaching the good rules underneath it. Use parent_ends_with with no name to say "each child of".
+#
+# Neither carries min_age_days on purpose. One of these is a unit whether or not it was touched
+# lately, and matching it is also what stops the walk from wandering into a simulator's own caches
+# and app containers, where nothing is worth removing on its own. Reading the age off a folder is
+# unreliable anyway: simply measuring it updates the access time.
+
 [[rule]]
-id = "simulator"
-tier = "safe"
-what = "Xcode simulators & device support"
-note = "Xcode downloads again only for devices you actually use."
-weight = 2.5
+id = "devicesupport"
+tier = "likely"
+what = "Device support files"
+note = "Debug symbols for one OS version. Xcode fetches them again the next time you attach a device running it. {idle}"
+weight = 2.0
 dir = true
-name = ["CoreSimulator", "iOS DeviceSupport", "watchOS DeviceSupport", "tvOS DeviceSupport", "visionOS DeviceSupport"]
+parent_ends_with = "DeviceSupport"
+min_size = "200 MB"
+
+[[rule]]
+id = "simulator-device"
+tier = "review"
+what = "Simulator devices"
+note = "One simulator, with everything installed on it. Deleting it is like erasing that device. {idle}"
+dir = true
+parent_ends_with = "CoreSimulator/Devices"
+min_size = "200 MB"
 
 [[rule]]
 id = "trash"
@@ -132,6 +154,16 @@ min_age_days = 181
 
 # ---- files ----
 # Possible duplicates (same name and size as another file of 5 MB or more) are found before these; that check is built in.
+
+[[rule]]
+id = "simruntime"
+tier = "review"
+what = "Simulator runtimes"
+note = "One installed simulator runtime, and it may be mounted right now. Remove it in Xcode under Settings > Platforms rather than deleting the file."
+dir = false
+ext = ["dmg"]
+parent_ends_with = "CoreSimulator/Images"
+min_size = "100 MB"
 
 [[rule]]
 id = "diskimage"
