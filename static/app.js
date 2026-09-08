@@ -1185,16 +1185,19 @@ async function openShelf() {
   openDialog({ title: 'Shelf', sub: rows.length ? `${rows.length} item${rows.length === 1 ? '' : 's'} · ${fmt(sumOf(rows))} on the shelf in ~/.dime/shelf. Still on your disk: deleting from here is what frees the space. Put back returns things exactly where they were.` : 'Nothing on the shelf yet. Tick items in Cleanup, then shelve them from the shortlist.',
     rows, select: true,
     actions: [
-      { label: (c) => `Put back ${c.length}`, fn: (c) => act('/api/shelf/restore', { ids: c.map((r) => r.key) }, 'put back') },
-      { cls: 'danger', label: (c) => `Delete ${c.length} for good…`, fn: purgeShelf },
+      { label: (c) => c.length ? `Put back ${c.length}` : 'Put back', fn: (c) => act('/api/shelf/restore', { ids: c.map((r) => r.key) }, 'put back') },
+      { cls: 'danger', label: (c) => c.length ? `Delete ${c.length} for good…` : 'Delete ticked…', fn: purgeShelf },
     ] });
   if (rows.length) {
     const ru = document.createElement('button'); ru.type = 'button'; ru.className = 'btn sm ru'; ru.textContent = '✦ Ask Ru'; ru.style.marginRight = 'auto';
     ru.onclick = () => { dlg.close(); ruOpen('shelf'); };
-    // emptying the whole shelf without ticking every row first, behind the same gate
+    // Emptying the shelf and deleting a selection are the same act on different rows, so never show
+    // both: Empty stands in until you tick something, then the row buttons take over.
     const all = document.createElement('button'); all.type = 'button'; all.className = 'btn sm danger quiet'; all.textContent = `Empty the shelf · ${fmt(sumOf(rows))}`;
     all.onclick = () => purgeShelf(rows);
     dlg.querySelector('.foot').prepend(ru, all);
+    const list = dlg.querySelector('.list'), sync = () => (all.hidden = !!list.querySelector('input:checked'));
+    list.addEventListener('change', sync); sync();
   }
 }
 /// Second look before anything leaves the disk for good, shared by the ticked rows and Empty the shelf.
