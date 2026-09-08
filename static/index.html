@@ -91,6 +91,7 @@
   #crumbs .who.me { background: rgba(255,90,78,.15); color: var(--me); }
   #toast.du { border-left: 4px solid var(--du); } #toast.me { border-left: 4px solid var(--me); } #toast.ru { border-left: 4px solid var(--ru); }
   #landing .tag { color: var(--ink-2); max-width: 46ch; margin: 0; font-size: 20px; letter-spacing: -.01em; }
+  #landing .tag.sub { font-size: 15px; margin-top: 10px; } /* ink-3 would be 3.2:1 here, so the smaller size carries the hierarchy instead */
   #landing h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 0 0 10px; }
   #drives { display: flex; flex-wrap: wrap; gap: 10px; }
   .drive { display: grid; grid-template-columns: 52px 1fr; gap: 12px; align-items: center; text-align: left;
@@ -589,6 +590,7 @@
     <div>
       <h1><span class="du">Di</span><span class="me">Me</span></h1>
       <p class="tag"><b class="du">Di</b> digs through your disk. <b class="me">Me</b> watches your memory. <b class="ru">Ru</b> says what can go.</p>
+      <p class="tag sub">Together, it is <b class="ru">Ru</b>.<b class="du">Di</b>.<b class="me">Me</b>.ntary disk and memory analysis with zen advice. Have fun!</p>
     </div>
     <div id="modes">
       <button class="mode du" data-mode="disk" aria-pressed="false"><span class="glyph"><svg viewBox="0 0 48 32" aria-hidden="true"><path d="M6 6h30M21 6v6M14 12h18l6 6v4H10l-4-4v-6zM8 26h14M4 22l6 4M36 22l-6-2"/></svg></span><span class="mn"><b>Di</b>.sk</span><b>Dig through the drive</b><p>Di sends a search party over every folder, maps it in 3D, and points at what is safe to throw out.</p><span class="alt" role="button" tabindex="0" hidden>Scan another folder…</span></button>
