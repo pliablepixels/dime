@@ -1069,11 +1069,24 @@ async function openShelf() {
     rows, select: true,
     actions: [
       { label: (c) => `Put back ${c.length}`, fn: (c) => act('/api/shelf/restore', { ids: c.map((r) => r.key) }, 'put back') },
-      { cls: 'danger', label: (c) => `Delete ${c.length} for good…`, fn: (c) => openDialog({ title: 'Delete for good', sub: 'Removed from the shelf and from your disk. This is the step that frees the space.', rows: c, select: false, gate: 'I understand this cannot be undone.',
-        actions: [{ cls: 'danger', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/shelf/delete', { ids: x.map((r) => r.key) }, 'deleted') }] }) },
+      { cls: 'danger', label: (c) => `Delete ${c.length} for good…`, fn: purgeShelf },
     ] });
-  if (rows.length) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sm ru'; b.textContent = '✦ Ask Ru'; b.style.marginRight = 'auto'; b.onclick = () => { dlg.close(); ruOpen('shelf'); }; dlg.querySelector('.foot').prepend(b); }
+  if (rows.length) {
+    const ru = document.createElement('button'); ru.type = 'button'; ru.className = 'btn sm ru'; ru.textContent = '✦ Ask Ru'; ru.style.marginRight = 'auto';
+    ru.onclick = () => { dlg.close(); ruOpen('shelf'); };
+    // emptying the whole shelf without ticking every row first, behind the same gate
+    const all = document.createElement('button'); all.type = 'button'; all.className = 'btn sm danger quiet'; all.textContent = `Empty the shelf · ${fmt(sumOf(rows))}`;
+    all.onclick = () => purgeShelf(rows);
+    dlg.querySelector('.foot').prepend(ru, all);
+  }
 }
+/// Second look before anything leaves the disk for good, shared by the ticked rows and Empty the shelf.
+const purgeShelf = (rows) => openDialog({
+  title: rows.length === shelfList.length ? 'Empty the shelf' : 'Delete for good',
+  sub: 'Removed from the shelf and from your disk. This is the step that frees the space.',
+  rows, select: false, gate: 'I understand this cannot be undone.',
+  actions: [{ cls: 'danger', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/shelf/delete', { ids: x.map((r) => r.key) }, 'deleted') }],
+});
 const nestedIn = (p, keys) => keys.some((k) => k !== p && (k === '' || p.startsWith(k + '/')));
 // One move at a time, with something on screen while it runs: without it a slow shelve looks like
 // nothing happened, and the obvious response is to click it again.

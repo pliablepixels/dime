@@ -2,6 +2,7 @@
 //! where each one came from so it can be restored in a later session.
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -87,14 +88,19 @@ pub fn shelve_partial(folder: &Path, files: &[PathBuf], size: u64, note: String)
     all.push(e.clone());
     save(&all)?; // listed before anything moves
     let base = item_path(&e);
-    let mut moved = 0;
+    let (mut moved, mut bytes) = (0u64, 0u64);
     for rel in files {
+        // never `?` in here: an early return would strand the entry saved above, claiming files that
+        // never moved. Skip what fails and let the count and size below say what really happened.
+        let from = folder.join(rel);
+        let Ok(md) = fs::symlink_metadata(&from) else { continue };
         let to = base.join(rel);
-        if let Some(p) = to.parent() {
-            fs::create_dir_all(p)?;
+        if to.parent().is_some_and(|p| fs::create_dir_all(p).is_err()) {
+            continue;
         }
-        if mv(&folder.join(rel), &to).is_ok() {
+        if mv(&from, &to).is_ok() {
             moved += 1;
+            bytes += md.blocks() * 512;
         }
     }
     if moved == 0 {
@@ -103,8 +109,8 @@ pub fn shelve_partial(folder: &Path, files: &[PathBuf], size: u64, note: String)
         let _ = fs::remove_dir_all(dir().join(&e.id));
         return Err(std::io::Error::other("nothing could be moved"));
     }
-    let e = Entry { count: moved, ..e };
-    if let Some(x) = all.iter_mut().find(|x| x.id == e.id) { x.count = moved; }
+    let e = Entry { count: moved, size: bytes, ..e };
+    if let Some(x) = all.iter_mut().find(|x| x.id == e.id) { x.count = moved; x.size = bytes; }
     save(&all)?;
     Ok(e)
 }

@@ -43,8 +43,15 @@ struct App {
     job: Mutex<Option<(String, u64, u64)>>,
 }
 
-fn job_start(app: &App, verb: &str, total: usize) {
-    *app.job.lock().unwrap() = Some((verb.into(), 0, total as u64));
+/// Claims the one job slot. Refuses while another batch is running, so a second window or an
+/// impatient second click cannot move the same paths twice.
+fn job_start(app: &App, verb: &str, total: usize) -> bool {
+    let mut j = app.job.lock().unwrap();
+    if j.is_some() {
+        return false;
+    }
+    *j = Some((verb.into(), 0, total as u64));
+    true
 }
 fn job_tick(app: &App) {
     if let Some(j) = app.job.lock().unwrap().as_mut() {
@@ -670,7 +677,9 @@ async fn shelf_add(State(app): State<Shared>, Json(req): Json<PathsReq>) -> Json
         let mut moved = vec![];
         let idle = req.idle.map(cutoff_for);
         let cands = candidates(&app).unwrap_or_else(|_| std::sync::Arc::new(vec![])); // once, not once per item
-        job_start(&app, "shelved", req.paths.len());
+        if !job_start(&app, "shelved", req.paths.len()) {
+            return Json(req.paths.into_iter().map(|key| Outcome { key, ok: false, error: Some("another move is already running".into()) }).collect());
+        }
         for key in req.paths {
             let r = target(&app, &key, &cands).map_err(|e| e.1).and_then(|(rel, abs, size, note)| match idle {
                 Some(cut) if abs.is_dir() => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, bytes)| shelf::shelve_partial(&abs, &files, bytes, format!("{note} · only files idle at the time")).map(|_| files.iter().map(|f| abs.join(f)).collect::<Vec<_>>()).map_err(|e| e.to_string())),
@@ -697,7 +706,9 @@ async fn delete_paths(State(app): State<Shared>, Json(req): Json<PathsReq>) -> J
         let mut gone = vec![];
         let idle = req.idle.map(cutoff_for);
         let cands = candidates(&app).unwrap_or_else(|_| std::sync::Arc::new(vec![])); // once, not once per item
-        job_start(&app, "deleted", req.paths.len());
+        if !job_start(&app, "deleted", req.paths.len()) {
+            return Json(req.paths.into_iter().map(|key| Outcome { key, ok: false, error: Some("another move is already running".into()) }).collect());
+        }
         for key in req.paths {
             let r = target(&app, &key, &cands).map_err(|e| e.1).and_then(|(rel, abs, ..)| match idle {
                 Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| {
