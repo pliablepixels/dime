@@ -356,38 +356,79 @@ const sites = { pool: [], group: new THREE.Group() };
 scene.add(sites.group);
 const SITE_FIT = 6.5; // a deck narrower than this has no room for a crew, so it stays bare
 const siteScale = (w, h) => Math.max(0.62, Math.min(1.15, Math.min(w, h) / 14)); // the crew shrinks to fit its deck, but never past legibility
+// one minifigure: stubby legs, a blocky torso, swinging arms and a big head under a hard hat
+function makeFig(role, mats) {
+  const use = (m) => { mats.push(m); return m; };
+  const paint = (c, rough = 0.55) => use(new THREE.MeshStandardMaterial({ color: c, roughness: rough, transparent: true }));
+  const boss = role === 'boss';
+  const skin = paint('#F5C26B', 0.5), navy = paint('#46557A', 0.7);
+  const vest = paint(boss ? '#4FD1C5' : '#FF7A3D', 0.5);
+  const g = new THREE.Group();
+  const hips = new THREE.Group(); hips.position.y = 0.78; g.add(hips);
+  const legs = [];
+  for (const sx of [-1, 1]) {
+    const l = new THREE.Group(); l.position.set(sx * 0.17, 0, 0);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.78, 0.34), navy); m.position.y = -0.39;
+    l.add(m); hips.add(l); legs.push(l);
+  }
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.86, 0.44), vest); torso.position.y = 1.21; g.add(torso);
+  const arms = [];
+  for (const sx of [-1, 1]) {
+    const a = new THREE.Group(); a.position.set(sx * 0.47, 1.56, 0);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.62, 0.26), vest); m.position.y = -0.31;
+    const hand = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.16, 8), skin); hand.position.y = -0.66;
+    a.add(m, hand); g.add(a); arms.push(a);
+  }
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.31, 0.31, 0.56, 12), skin); head.position.y = 1.92; g.add(head);
+  const hat = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), paint(boss ? '#E8E6DF' : '#FFD98A', 0.4)); hat.position.y = 2.18; g.add(hat);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.44, 0.07, 14), hat.material); brim.position.y = 2.18; g.add(brim);
+  // the one running the job carries a clipboard; one of the others hauls a beam about
+  let prop = null;
+  if (boss) { prop = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.06), paint('#E8E6DF', 0.8)); prop.position.set(0.4, 1.15, 0.34); prop.rotation.x = -0.5; g.add(prop); }
+  if (role === 'carry') { prop = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 3.4), paint('#F5C26B', 0.6)); prop.position.set(0, 0.95, 0.55); g.add(prop); }
+  g.scale.setScalar(1.35);
+  return { g, legs, arms, role, prop, phase: Math.random() * 6.3, speed: 0.55 + Math.random() * 0.35 };
+}
 function makeSite() {
   const g = new THREE.Group();
-  const gold = () => new THREE.MeshStandardMaterial({ color: '#F5C26B', roughness: 0.5, metalness: 0.3, transparent: true });
-  const dark = () => new THREE.MeshStandardMaterial({ color: '#46557A', roughness: 0.75, transparent: true });
   const mats = [];
   const use = (m) => { mats.push(m); return m; };
+  const gold = () => use(new THREE.MeshStandardMaterial({ color: '#F5C26B', roughness: 0.5, metalness: 0.3, transparent: true }));
+  const dark = () => use(new THREE.MeshStandardMaterial({ color: '#46557A', roughness: 0.75, transparent: true }));
 
   const crane = new THREE.Group();
-  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.55, 13, 0.55), use(gold())); mast.position.y = 6.5;
-  const jib = new THREE.Mesh(new THREE.BoxGeometry(12, 0.35, 0.35), use(gold())); jib.position.set(3.4, 12.7, 0);
-  const cw = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.9), use(dark())); cw.position.set(-2.6, 12.7, 0);
-  const cable = new THREE.Mesh(new THREE.BoxGeometry(0.09, 6, 0.09), use(dark())); cable.position.set(8, 9.7, 0);
-  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.8), use(gold())); hook.position.set(8, 6.7, 0);
+  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.55, 13, 0.55), gold()); mast.position.y = 6.5;
+  const jib = new THREE.Mesh(new THREE.BoxGeometry(12, 0.35, 0.35), gold()); jib.position.set(3.4, 12.7, 0);
+  const cw = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.9), dark()); cw.position.set(-2.6, 12.7, 0);
+  const cable = new THREE.Mesh(new THREE.BoxGeometry(0.09, 6, 0.09), dark()); cable.position.set(8, 9.7, 0);
+  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 0.8), gold()); hook.position.set(8, 6.7, 0);
   crane.add(mast, jib, cw, cable, hook); g.add(crane);
 
   const doz = new THREE.Group(); doz.scale.setScalar(1.5);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1, 1.5), use(gold())); body.position.y = 0.75;
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.2, 2.1), use(dark())); blade.position.set(1.5, 0.65, 0);
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(1, 0.85, 1.1), use(dark())); cab.position.set(-0.5, 1.6, 0);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1, 1.5), gold()); body.position.y = 0.75;
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.2, 2.1), dark()); blade.position.set(1.5, 0.65, 0);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1, 0.85, 1.1), dark()); cab.position.set(-0.5, 1.6, 0);
   doz.add(body, blade, cab); g.add(doz);
 
-  const workers = [];
-  for (let i = 0; i < 2; i++) {
-    const w = new THREE.Group(); w.scale.setScalar(1.6);
-    const legs = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.9, 0.38), use(dark())); legs.position.y = 0.45;
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.72, 0.48), use(new THREE.MeshStandardMaterial({ color: '#E8457A', roughness: 0.6, transparent: true }))); torso.position.y = 1.22;
-    const hat = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), use(new THREE.MeshStandardMaterial({ color: '#FFD98A', roughness: 0.4, transparent: true }))); hat.position.y = 1.68;
-    w.add(legs, torso, hat); g.add(w);
-    workers.push({ g: w, phase: Math.random() * 6.3 });
+  // the site itself: cones, a stack of materials, and a ladder against the mast
+  const props = new THREE.Group(); g.add(props);
+  for (const [cx, cz] of [[-1.6, 2.4], [1.9, 2.9], [3.1, -1.4]]) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.8, 10), use(new THREE.MeshStandardMaterial({ color: '#FF7A3D', roughness: 0.6, transparent: true })));
+    cone.position.set(cx, 0.4, cz); props.add(cone);
   }
+  for (let i = 0; i < 3; i++) {
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.42, 0.9), gold());
+    crate.position.set(-3.1 + (i % 2) * 0.2, 0.21 + i * 0.42, 2.0); crate.rotation.y = i * 0.2; props.add(crate);
+  }
+  const ladder = new THREE.Group(); ladder.position.set(-1.1, 0, -0.6); ladder.rotation.z = 0.22;
+  for (const sx of [-0.24, 0.24]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 3.4, 0.08), gold()); rail.position.set(sx, 1.7, 0); ladder.add(rail); }
+  for (let i = 0; i < 5; i++) { const rung = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.07), gold()); rung.position.y = 0.5 + i * 0.65; ladder.add(rung); }
+  props.add(ladder);
+
+  const figs = [makeFig('boss', mats), makeFig('walk', mats), makeFig('walk', mats), makeFig('carry', mats)];
+  for (const f of figs) g.add(f.g);
   sites.group.add(g);
-  return { g, crane, jib, cable, hook, doz, workers, mats, key: null, out: 0, phase: Math.random() * 6.3 };
+  return { g, crane, jib, cable, hook, doz, figs, mats, key: null, out: 0, phase: Math.random() * 6.3 };
 }
 function updateSites(dt, now) {
   sites.group.visible = scanning || sites.pool.some((s) => s.key || s.out > 0);
@@ -434,10 +475,24 @@ function updateSites(dt, now) {
     const dx = Math.cos(a) * rw * 0.26, dz = Math.sin(a) * rh * 0.26;
     s.doz.position.set(dx, 0, dz);
     s.doz.rotation.y = -a + Math.PI / 2;
-    s.workers.forEach((w, i) => {
-      const t = REDUCED ? 0 : now / 900 + w.phase;
-      w.g.position.set(rw * (i ? 0.24 : -0.18), Math.abs(Math.sin(t)) * 0.18, rh * (i ? -0.22 : 0.26));
-      w.g.rotation.y = Math.sin(t * 0.4) * 1.6;
+    s.figs.forEach((f, i) => {
+      if (f.role === 'boss') { // stands back and watches, turning to take the site in
+        const t = REDUCED ? 0 : now / 3400 + f.phase;
+        f.g.position.set(-rw * 0.34, 0, rh * 0.3);
+        f.g.rotation.y = Math.sin(t) * 1.3 - 0.6;
+        for (const l of f.legs) l.rotation.x = 0;
+        f.arms[0].rotation.x = -1.1; f.arms[1].rotation.x = -0.9 + (REDUCED ? 0 : Math.sin(now / 900 + f.phase) * 0.18);
+        return;
+      }
+      // the rest walk laps of the deck, legs and arms swinging opposite each other
+      const a = REDUCED ? f.phase : now / 1000 * f.speed * 0.6 + f.phase;
+      const ax = rw * (f.role === 'carry' ? 0.2 : 0.3), az = rh * (f.role === 'carry' ? 0.2 : 0.3) * (i % 2 ? -1 : 1);
+      f.g.position.set(Math.cos(a) * ax, REDUCED ? 0 : Math.abs(Math.sin(a * 9)) * 0.07, Math.sin(a) * az);
+      f.g.rotation.y = -Math.atan2(Math.cos(a) * az, -Math.sin(a) * ax) + Math.PI / 2;
+      const step = REDUCED ? 0 : Math.sin(a * 9) * 0.72;
+      f.legs[0].rotation.x = step; f.legs[1].rotation.x = -step;
+      if (f.role === 'carry') { f.arms[0].rotation.x = -1.35; f.arms[1].rotation.x = -1.35; }
+      else { f.arms[0].rotation.x = -step * 0.55; f.arms[1].rotation.x = step * 0.55; }
     });
   }
 }
