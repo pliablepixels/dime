@@ -18,8 +18,8 @@ const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3)
 // A folder still being counted shows whole megabytes, because gigabytes tick over far too slowly to
 // read as progress. The moment it is done, fmt takes over and picks the unit that fits.
 const fmtScan = (b) => b < (1 << 20) ? fmt(b) : Math.round(b / (1 << 20)).toLocaleString() + ' MB';
-const ageDays = (n) => Math.max(0, Math.floor((Date.now() / 1000 - Math.max(n.atime, n.mtime)) / 86400));
-const fmtAge = (d) => d === 0 ? 'used today' : d < 30 ? `${d}d idle` : d < 365 ? `${Math.round(d / 30)}mo idle` : `${(d / 365).toFixed(1)}y idle`;
+const ageDays = (n) => { const t = Math.max(n.atime, n.mtime); return t > 0 ? Math.max(0, Math.floor((Date.now() / 1000 - t) / 86400)) : -1; }; // -1: no usable timestamp, which is unknown rather than ancient
+const fmtAge = (d) => d < 0 ? 'age unknown' : d === 0 ? 'used today' : d < 30 ? `${d}d idle` : d < 365 ? `${Math.round(d / 30)}mo idle` : `${(d / 365).toFixed(1)}y idle`;
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const toast = (msg, who) => { const t = $('#toast'); t.textContent = msg; t.className = who || ''; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), 2600); };
 // the two characters: Di runs the disk search party, Me flies the rocket over live processes

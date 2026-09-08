@@ -459,7 +459,7 @@ fn candidates(app: &App) -> Result<Arc<Vec<gunk::Candidate>>, ApiErr> {
     let v = app.version.load(Ordering::Relaxed);
     let mut c = app.cands.lock().unwrap();
     if c.0 != v {
-        let list = with_tree(app, |_, t| Ok(gunk::find_all(t)))?;
+        let list = with_tree(app, |root, t| Ok(gunk::find_all(root, t)))?;
         *c = (v, Arc::new(list));
     }
     Ok(c.1.clone())

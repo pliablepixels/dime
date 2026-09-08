@@ -75,6 +75,9 @@ pub struct Item<'a> {
     pub ext: &'a str,
     pub size: u64,
     pub age_days: i64,
+    /// False when the file carries no usable timestamp, which macOS leaves at the epoch on some
+    /// system files. Unknown is not the same as ancient, so it must never satisfy an age floor.
+    pub age_known: bool,
     /// path of the folder holding it, relative to the scan root ("" at the top)
     pub parent: &'a str,
     pub children: &'a [String],
@@ -89,7 +92,7 @@ impl Rule {
             && self.under.as_deref().is_none_or(|u| it.parent.split('/').any(|s| s == u))
             && (self.has_child.is_empty() || it.children.iter().any(|c| self.has_child.contains(c)))
             && it.size >= self.min_size
-            && it.age_days >= self.min_age_days
+            && (self.min_age_days == 0 || (it.age_known && it.age_days >= self.min_age_days))
     }
 }
 
@@ -130,7 +133,7 @@ mod tests {
     use super::*;
 
     fn item<'a>(name: &'a str, is_dir: bool, size: u64, age: i64, parent: &'a str) -> Item<'a> {
-        Item { name, is_dir, ext: name.rsplit('.').next().unwrap_or(""), size, age_days: age, parent, children: &[] }
+        Item { name, is_dir, ext: name.rsplit('.').next().unwrap_or(""), size, age_days: age, age_known: true, parent, children: &[] }
     }
 
     #[test]
@@ -179,6 +182,13 @@ min_size = "1 MB"
 
         assert!(merge("[[rule]]\nid=\"x\"\ntier=\"nope\"\nwhat=\"\"\nnote=\"\"").unwrap_err().contains("tier"));
         assert!(merge("[[rule]]\nid=\"x\"\ntier=\"safe\"\nwhat=\"\"\nnote=\"\"\nbogus=1").is_err());
+        // no usable timestamp is unknown, not ancient: an age floor must not treat it as old
+        let mut undated = item("thing.dmg", false, 8 << 30, 20_000, "Library/Developer/CoreDevice");
+        undated.age_known = false;
+        assert!(b.iter().find(|r| r.matches(&undated)).is_none_or(|r| r.min_age_days == 0));
+        let dated = item("thing.dmg", false, 8 << 30, 20_000, "Library/Developer/CoreDevice");
+        assert_eq!(b.iter().find(|r| r.matches(&dated)).unwrap().id, "installer");
+
         assert_eq!(parse_size("20 MB"), Some(20 << 20));
         assert_eq!(parse_size("1.5gb"), Some(3 << 29));
         assert_eq!(parse_size("512"), Some(512));

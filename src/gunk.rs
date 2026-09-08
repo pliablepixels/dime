@@ -5,6 +5,8 @@ use crate::rules::{self, Item, Rule};
 use crate::scan::{join, Node};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MB: u64 = 1 << 20;
@@ -38,6 +40,10 @@ pub struct Summary {
 struct Walk {
     now: i64,
     rules: Vec<Rule>,
+    /// Absolute path of the scan root, so a candidate can be checked against the real filesystem.
+    base: PathBuf,
+    /// Whether each folder walked can be written to, cached because siblings share one.
+    writable: HashMap<String, bool>,
     out: Vec<Candidate>,
     /// (size, name) -> first path seen, for cheap duplicate detection of big files
     seen: HashMap<(u64, String), (String, i64)>,
@@ -52,9 +58,23 @@ fn months(days: i64) -> String {
 
 /// All candidates in the tree, best first. Compute once per tree version; filter by prefix per request.
 /// Rules are re-read each time, so edits to ~/.dime/rules.toml show up on the next rescan.
-pub fn find_all(root: &Node) -> Vec<Candidate> {
+/// Removing something means writing to the folder that holds it, so that is what decides whether
+/// DiMe may offer it. Without this it lists root-owned system assets it could never remove.
+fn removable(w: &mut Walk, dir: &str) -> bool {
+    if let Some(&v) = w.writable.get(dir) {
+        return v;
+    }
+    let abs = if dir.is_empty() { w.base.clone() } else { w.base.join(dir) };
+    let ok = std::ffi::CString::new(abs.as_os_str().as_bytes())
+        .map(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
+        .unwrap_or(false);
+    w.writable.insert(dir.to_string(), ok);
+    ok
+}
+
+pub fn find_all(base: &Path, root: &Node) -> Vec<Candidate> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let mut w = Walk { now, rules: rules::load(), out: vec![], seen: HashMap::new() };
+    let mut w = Walk { now, rules: rules::load(), base: base.to_path_buf(), writable: HashMap::new(), out: vec![], seen: HashMap::new() };
     walk(&mut w, root, "");
     w.out.sort_by(|a, b| b.score.total_cmp(&a.score));
     w.out
@@ -89,7 +109,9 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             continue;
         }
         let p = join(path, &c.name);
-        let age = ((w.now - c.atime.max(c.mtime)) / DAY).max(0);
+        let stamp = c.atime.max(c.mtime);
+        let age_known = stamp > 0; // some system files sit at the epoch; that is unknown, not ancient
+        let age = if age_known { ((w.now - stamp) / DAY).max(0) } else { 0 };
         let mk = |rule: &Rule, note: String| Candidate {
             path: p.clone(),
             name: c.name.clone(),
@@ -117,9 +139,13 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
         }
         let e = ext(&c.name);
         let kids: Vec<String> = if c.is_dir { c.children.iter().map(|k| k.name.clone()).collect() } else { vec![] };
-        let it = Item { name: &c.name, is_dir: c.is_dir, ext: &e, size: c.size, age_days: age, parent: path, children: &kids };
-        if let Some(r) = w.rules.iter().find(|r| r.matches(&it)) {
-            let note = r.note.replace("{idle}", &format!("Idle {}.", months(age))).replace("{age}", &months(age));
+        let it = Item { name: &c.name, is_dir: c.is_dir, ext: &e, size: c.size, age_days: age, age_known, parent: path, children: &kids };
+        // checked before the rule lookup so the two borrows of `w` never overlap; an item we cannot
+        // remove still gets walked into, since something deeper may sit in a folder we do own
+        let can_remove = removable(w, path);
+        if let Some(r) = w.rules.iter().filter(|_| can_remove).find(|r| r.matches(&it)) {
+            let idle = if age_known { format!("Idle {}.", months(age)) } else { "Age unknown.".into() };
+            let note = r.note.replace("{idle}", &idle).replace("{age}", &if age_known { months(age) } else { "an unknown time".into() });
             w.out.push(mk(r, note));
         } else if c.is_dir {
             walk(w, c, &p);
@@ -144,7 +170,7 @@ mod tests {
         std::fs::write(dir.join("proj/copy.dmg"), vec![1u8; 6 << 20]).unwrap();
         let mut tree = scan::scan(&dir, &scan::Progress::new(&dir));
         assert_eq!(tree.files, 4);
-        let all = find_all(&tree);
+        let all = find_all(&dir, &tree);
         let by = |r: &str| all.iter().find(|c| c.reason == r).map(|c| c.path.clone());
         assert_eq!(by("cache"), Some("proj/node_modules".into()));
         assert_eq!(all.iter().find(|c| c.reason == "cache").unwrap().tier, "safe");
