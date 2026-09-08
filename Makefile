@@ -56,7 +56,10 @@ check-clean:
 release: check-clean
 	sed -i '' 's/^version = ".*"/version = "$(V)"/' Cargo.toml
 	$(CARGO) check --quiet
-	git add Cargo.toml Cargo.lock && git commit -q -m "v$(V)" && git tag v$(V) && git push -q origin master v$(V)
+	git add Cargo.toml Cargo.lock
+	git diff --cached --quiet || git commit -q -m "v$(V)"   # already at this version: nothing to commit, still tag it
+	git tag v$(V)
+	git push -q origin master v$(V)
 	$(MAKE) app VERSION=$(V)
 	gh release create v$(V) --generate-notes --title "v$(V)" \
 		dist/DiMe-$(V)-macos.zip dist/$(NAME)-$(V)-macos.tar.gz
