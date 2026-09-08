@@ -1727,6 +1727,17 @@ let mapAsOf = null; // epoch seconds when the map came from a snapshot, null aft
 // when Full Disk Access would actually help: without that grant, nothing DiMe can be given opens them.
 // Ordinary Unix permission denials are not counted either, for the same reason.
 let deniedShown = false;
+// Asked once, before any scan. macOS has no way for an app to request Full Disk Access itself, so
+// all DiMe can do is explain it and open the right pane. Without it, protected folders are denied
+// outright rather than prompting one by one, which is the trade this makes deliberately.
+function fdaNote(fda) {
+  const el = $('#fdanote');
+  if (fda !== false) { el.hidden = true; return; }
+  el.innerHTML = `<span><b>DiMe cannot read your protected folders yet.</b> Mail, Messages, Safari and others will measure smaller than they are until you grant Full Disk Access.</span><button type="button">Grant it</button><button class="x" type="button" title="Dismiss">Later</button>`;
+  el.querySelector('button').onclick = () => { api('/api/fda', {}).catch((e) => toast(e.message)); toast('Di: add DiMe to the list, then start it again', 'du'); };
+  el.querySelector('.x').onclick = () => (el.hidden = true);
+  el.hidden = false;
+}
 function denyBanner(n, fda) {
   const el = $('#denied');
   if (!n || fda || deniedShown) { el.hidden = true; return; }
@@ -1764,6 +1775,7 @@ function renderSnaps(list) {
 api('/api/status').then(async (s) => {
   renderSnaps(s.state === 'idle' ? s.snapshots : []);
   applyRu(s.ru);
+  fdaNote(s.fda);
   if (s.state === 'idle' || location.hash === '#memory') {
     if (s.state === 'done') { scanDone = true; rootPath = s.root.replace(/\/$/, ''); rootName = rootPath.split('/').filter(Boolean).pop() || '/'; rootSize = s.size || 1; mapAsOf = s.as_of ?? null; await loadDrive(); await loadState(); }
     return;

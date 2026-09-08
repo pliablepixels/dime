@@ -91,6 +91,13 @@
   #crumbs .who.me { background: rgba(255,90,78,.15); color: var(--me); }
   #toast.du { border-left: 4px solid var(--du); } #toast.me { border-left: 4px solid var(--me); } #toast.ru { border-left: 4px solid var(--ru); }
   #landing .tag { color: var(--ink-2); max-width: 46ch; margin: 0; font-size: 20px; letter-spacing: -.01em; }
+  #fdanote { display: flex; align-items: baseline; gap: 10px; max-width: 560px; margin: 14px 0 0; padding: 10px 14px; border-radius: 10px;
+    background: rgba(255,122,61,.10); border: 1px solid rgba(255,122,61,.38); font-size: 13px; color: var(--ink-2); }
+  #fdanote[hidden] { display: none; }
+  #fdanote b { color: var(--hot); }
+  #fdanote button { background: none; border: 0; padding: 0; font-size: 13px; font-weight: 700; color: var(--hot); white-space: nowrap; }
+  #fdanote button:hover { text-decoration: underline; }
+  #fdanote .x { color: var(--ink-3); font-weight: 600; margin-left: auto; }
   #landing .tag.sub { font-size: 14px; font-style: italic; max-width: none; margin-top: 10px; } /* max-width none so it stays on one line; ink-3 would be 3.2:1 here, so size and slant carry the hierarchy instead */
   #landing h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 0 0 10px; }
   #drives { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -613,6 +620,7 @@
     <div>
       <h1><span class="du">Di</span><span class="me">Me</span></h1>
       <p class="tag"><b class="du">Di</b> digs through your disk. <b class="me">Me</b> watches your memory. <b class="ru">Ru</b> says what can go.</p>
+      <div id="fdanote" hidden></div>
       <p class="tag sub">Together, it is <b class="ru">Ru</b>.<b class="du">Di</b>.<b class="me">Me</b>.ntary disk and memory analysis with zen advice. Have fun!</p>
     </div>
     <div id="modes">

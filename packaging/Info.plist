@@ -18,12 +18,9 @@
   <!-- the UI is served from 127.0.0.1, which WKWebView reaches over plain http -->
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
-
-  <!-- Di maps whatever you point it at; macOS asks before letting it read these -->
-  <key>NSDesktopFolderUsageDescription</key>       <string>DiMe measures what is on your Desktop so it can show it on the map.</string>
-  <key>NSDocumentsFolderUsageDescription</key>     <string>DiMe measures what is in your Documents so it can show it on the map.</string>
-  <key>NSDownloadsFolderUsageDescription</key>     <string>DiMe measures what is in your Downloads so it can flag old installers and archives.</string>
-  <key>NSRemovableVolumesUsageDescription</key>    <string>DiMe maps external drives you ask it to scan.</string>
-  <key>NSFileProviderDomainUsageDescription</key>  <string>DiMe measures files stored in cloud folders without downloading them.</string>
+  <!-- No per-folder usage keys on purpose. Declaring them makes macOS prompt separately for Desktop,
+       Documents, Downloads and the rest, which is a stream of dialogs for an app that walks the whole
+       disk. Full Disk Access covers all of it in one grant, so that is the only thing DiMe asks for.
+       Without it those folders are denied outright and DiMe says so, rather than prompting again. -->
 </dict>
 </plist>
