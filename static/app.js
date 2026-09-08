@@ -2112,11 +2112,11 @@ function dustTex() {
   if (_dustTex) return _dustTex;
   const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
   const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.22, 'rgba(255,255,255,.6)'); r.addColorStop(0.55, 'rgba(255,255,255,.16)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.3, 'rgba(255,255,255,.85)'); r.addColorStop(0.62, 'rgba(255,255,255,.32)'); r.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = r; g.fillRect(0, 0, 64, 64);
   _dustTex = new THREE.CanvasTexture(c); return _dustTex;
 }
-const trailMat = new THREE.PointsMaterial({ size: 2.4, map: dustTex(), vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true });
+const trailMat = new THREE.PointsMaterial({ size: 2.6, map: dustTex(), vertexColors: true, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true });
 const TRAIL_N = 28;
 
 function orbitBuildStatic() {
@@ -2227,7 +2227,7 @@ function updateOrbit(dt, now) {
       const h = o.hist[Math.max(0, i - (TRAIL_N - n))] ?? [o.x, y, o.z];
       pos.setXYZ(i, h[0], h[1], h[2]);
       const t = i / (TRAIL_N - 1), c = o.col;
-      const f = t * t * (0.55 + 0.75 * t); // the oldest grains all but vanish, the newest catch the light
+      const f = 0.3 + 1.25 * t * t; // even the oldest grains keep a glimmer; the newest burn past white
       col.setXYZ(i, c.r * f, c.g * f, c.b * f);
     }
     pos.needsUpdate = true; col.needsUpdate = true; o.trail.geometry.setDrawRange(0, TRAIL_N);
