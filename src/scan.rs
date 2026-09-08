@@ -64,12 +64,20 @@ impl Progress {
     }
 }
 
-/// Directories the scan could not open because macOS refused. Reset at the start of every scan and
-/// read once it finishes, so DiMe can say that Full Disk Access would show more. One scan at a time,
-/// so a single counter is enough.
+/// Directories macOS itself refused, which is what Full Disk Access fixes. Reset at the start of
+/// every scan and read once it finishes. One scan at a time, so a single counter is enough.
 static DENIED: AtomicU64 = AtomicU64::new(0);
 pub fn denied() -> u64 {
     DENIED.load(Ordering::Relaxed)
+}
+
+/// Did macOS refuse this, or is it just an ordinary directory we have no rights to?
+///
+/// Rust reports both as `PermissionDenied`, but they need different advice: privacy refusals come
+/// back as EPERM and Full Disk Access opens them, while EACCES means the mode bits or the owner say
+/// no and no permission DiMe can be granted will change that. Only EPERM is worth mentioning.
+fn privacy_refusal(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(libc::EPERM)
 }
 
 /// Folders a scan never enters: system mounts under "/", and DiMe's own vault (moving something there must not just move it on the map).
@@ -253,8 +261,8 @@ fn scan_dir_slow(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[A
     let entries: Vec<fs::DirEntry> = match fs::read_dir(path) {
         Ok(rd) => rd.filter_map(Result::ok).collect(),
         Err(e) => {
-            // the bulk walk falls back to this one, so every refused directory is counted exactly here
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
+            // the bulk walk falls back to this one, so every refused directory passes through here
+            if privacy_refusal(&e) {
                 DENIED.fetch_add(1, Ordering::Relaxed);
             }
             vec![]
@@ -509,4 +517,21 @@ impl Node {
 
 pub fn join(a: &str, b: &str) -> String {
     if a.is_empty() { b.to_string() } else { format!("{a}/{b}") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the Full Disk Access banner: only macOS's own refusals are worth showing,
+    /// because those are the ones the user can do something about.
+    #[test]
+    fn only_privacy_refusals_count() {
+        let perm = std::io::Error::from_raw_os_error(libc::EPERM); // macOS privacy: "Operation not permitted"
+        let acces = std::io::Error::from_raw_os_error(libc::EACCES); // mode bits: "Permission denied"
+        assert_eq!(perm.kind(), acces.kind(), "Rust flattens both to PermissionDenied, hence this check");
+        assert!(privacy_refusal(&perm));
+        assert!(!privacy_refusal(&acces));
+        assert!(!privacy_refusal(&std::io::Error::from_raw_os_error(libc::ENOENT)));
+    }
 }

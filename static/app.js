@@ -1301,12 +1301,13 @@ async function startScan(path) {
 $('#scanform').onsubmit = (e) => { e.preventDefault(); startScan($('#path').value); };
 // page reload: pick up a scan already running or finished on the server
 let mapAsOf = null; // epoch seconds when the map came from a snapshot, null after a fresh scan
-// macOS refused some folders, so the map is smaller than the disk. Full Disk Access is the one fix; say so once per scan.
+// macOS itself refused some folders, so the map is smaller than the disk. Full Disk Access is the one fix; say so once per scan.
+// Folders refused by ordinary Unix permissions are not counted: no permission DiMe can be granted would open those.
 let deniedShown = false;
 function denyBanner(n) {
   const el = $('#denied');
   if (!n || deniedShown) { el.hidden = true; return; }
-  el.innerHTML = `<span><b>${fmtN(n)} folder${n === 1 ? '' : 's'} would not open.</b> That much of this drive is missing from the map.</span><button type="button">Give DiMe access</button><button class="x" type="button" title="Dismiss">Dismiss</button>`;
+  el.innerHTML = `<span><b>macOS held back ${fmtN(n)} folder${n === 1 ? '' : 's'}.</b> That much of this drive is missing from the map.</span><button type="button">Give DiMe access</button><button class="x" type="button" title="Dismiss">Dismiss</button>`;
   el.querySelector('button').onclick = () => { api('/api/fda', {}).catch((e) => toast(e.message)); toast('Di: add DiMe to the list, then start it again', 'du'); };
   el.querySelector('.x').onclick = () => { deniedShown = true; el.hidden = true; };
   el.hidden = false;
