@@ -382,6 +382,123 @@ function updateEscort(dt, now) {
   if (c.leaving && c.y > 110) { crew.group.remove(c.g); scene.remove(c.pool); crew.escort = null; }
 }
 
+// ---------- Ru in the world: the sage from the landing page, lifted into the scene ----------
+// Same character people already meet on the way in: a seated figure with a spark over its head and
+// two crossed orbits circling it. Di darts and Me cruises, so Ru barely moves; the contrast in
+// motion is the characterisation.
+const guru = { g: null, x: 40, z: 40, y: 40, vx: 0, vz: 0, key: null, want: false, glow: 0, busy: false, rings: [] };
+const RU_TILT = 32 * Math.PI / 180; // the ±32° of the two orbit paths on the landing button
+function makeSage() {
+  const g = new THREE.Group();
+  const skin = (o) => new THREE.MeshStandardMaterial({ color: '#C9B3FF', roughness: 0.4, metalness: 0.2, transparent: true, opacity: o, flatShading: true });
+  const robe = new THREE.Mesh(new THREE.ConeGeometry(2.5, 4.4, 6), skin(0.42)); robe.position.y = 0.4; g.add(robe);
+  const hem = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 6, 24), skin(0.7)); hem.rotation.x = Math.PI / 2; hem.position.y = -1.7; g.add(hem);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(1.05, 16, 12), skin(0.75)); head.position.y = 3.4; g.add(head);
+  const arms = new THREE.Mesh(new THREE.TorusGeometry(1.75, 0.14, 6, 20, Math.PI), skin(0.7)); // the sweep of the sleeves
+  arms.rotation.set(Math.PI / 2, 0, Math.PI); arms.position.y = 0.5; g.add(arms);
+  const spark = new THREE.Mesh(new THREE.OctahedronGeometry(0.62, 0), new THREE.MeshBasicMaterial({ color: '#F1E9FF' })); spark.position.y = 5.4; g.add(spark);
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 10), new THREE.MeshBasicMaterial({ color: '#F1E9FF', transparent: true, opacity: 0.9 })); core.position.y = 0.6; g.add(core);
+  const light = new THREE.PointLight('#C9B3FF', 40, 90, 2); light.position.y = 1; g.add(light);
+  // two crossed orbits with a bead on each, the periods taken from the landing animation
+  const rings = [];
+  for (const [tilt, period, phase] of [[-RU_TILT, 7, 0], [RU_TILT, 9.5, 4]]) {
+    const rg = new THREE.Group(); rg.rotation.set(Math.PI / 2 - 0.42, 0, tilt);
+    const path = new THREE.Mesh(new THREE.TorusGeometry(5.4, 0.05, 6, 96), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.3 }));
+    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 8), new THREE.MeshBasicMaterial({ color: '#C9B3FF' }));
+    rg.add(path, bead); g.add(rg);
+    rings.push({ bead, period, phase });
+  }
+  const halo = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), new THREE.MeshBasicMaterial({ map: poolTex(), color: '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  halo.rotation.x = -Math.PI / 2; scene.add(halo);
+  scene.add(g);
+  Object.assign(guru, { g, robe, head, spark, core, light, halo, rings });
+}
+/// Send Ru to hover over one item on the map. Null lets it drift back out.
+function ruLookAt(key) { guru.key = key ?? null; if (key) ruShow(true); }
+function ruShow(on) { guru.want = on; if (on && !guru.g) makeSage(); }
+function updateRuBody(dt, now) {
+  if (!guru.g) return;
+  const onMap = mode === 'disk';
+  const m = guru.key && onMap ? byKey.get(guru.key) : null;
+  const showing = guru.want && (onMap || !$('#landing').hidden);
+  let tx, tz, ty;
+  if (m && !m.userData.dying) {
+    const r = m.userData.cur;
+    tx = r.x + r.w / 2; tz = r.z + r.h / 2; ty = m.scale.y + 24 + Math.sin(now / 1600) * 1.2; // it sits above what it is reading
+  } else if (showing) {
+    const t = now / 1000 * 0.11; // a wide, unhurried loop
+    tx = Math.cos(t) * 58 - 10; tz = Math.sin(t * 0.8) * 40 + 10; ty = 40 + Math.sin(t * 1.7) * 2.5;
+  } else { tx = guru.x; tz = guru.z; ty = 150; }
+  if (REDUCED) { guru.x = tx; guru.z = tz; guru.y = ty; } else {
+    const ax = (tx - guru.x) * 0.9 - guru.vx * 1.9, az = (tz - guru.z) * 0.9 - guru.vz * 1.9; // gentler than the choppers on purpose
+    guru.vx += ax * dt; guru.vz += az * dt; guru.x += guru.vx * dt; guru.z += guru.vz * dt;
+    guru.y = smooth(guru.y, ty, 1 - Math.exp(-dt * 1.4));
+  }
+  guru.g.position.set(guru.x, guru.y, guru.z);
+  guru.g.rotation.y += dt * (REDUCED ? 0 : 0.16); // it turns slowly to face the room
+  // the light breathes, and quickens while Ru is working
+  const beat = guru.busy ? 0.55 + 0.45 * Math.sin(now / 260) : 0.6 + 0.25 * Math.sin(now / 1500);
+  guru.glow = smooth(guru.glow, beat, REDUCED ? 1 : 1 - Math.exp(-dt * 6));
+  guru.core.scale.setScalar(0.8 + guru.glow * 0.4);
+  guru.light.intensity = 25 + guru.glow * (guru.busy ? 130 : 55);
+  guru.robe.material.opacity = 0.34 + guru.glow * 0.14;
+  guru.spark.rotation.y += dt * 1.6; guru.spark.rotation.x += dt * 1.1;
+  guru.spark.scale.setScalar(0.8 + guru.glow * 0.5);
+  for (const r of guru.rings) {
+    const a = REDUCED ? 0 : ((now / 1000 + r.phase) / r.period) * Math.PI * 2;
+    r.bead.position.set(Math.cos(a) * 5.4, Math.sin(a) * 5.4, 0);
+    r.bead.visible = !REDUCED;
+  }
+  const near = m && Math.hypot(tx - guru.x, tz - guru.z) < 6;
+  guru.halo.position.set(guru.x, floorAt(guru.x, guru.z) + 0.16, guru.z);
+  const hs = 0.45 + guru.y / 70; guru.halo.scale.set(hs, hs, 1);
+  guru.halo.material.opacity = smooth(guru.halo.material.opacity, near ? 0.5 : showing ? 0.18 : 0, REDUCED ? 1 : 1 - Math.exp(-dt * 3));
+  if (!showing && guru.y > 140) { scene.remove(guru.g, guru.halo); guru.g = null; }
+}
+
+// ---- verdict marks: what Ru cleared pulses, what it wants kept holds a steadier ring
+const marks = [];
+function ruMark(key, kind) {
+  const m = byKey.get(key); if (!m) return;
+  const r = m.userData.cur;
+  const el = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: poolTex(), color: kind === 'keep' ? '#4FD1C5' : '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  el.rotation.x = -Math.PI / 2;
+  el.position.set(r.x + r.w / 2, m.scale.y + 0.4, r.z + r.h / 2);
+  el.scale.set(Math.max(r.w, 6), Math.max(r.h, 6), 1);
+  scene.add(el);
+  marks.push({ el, t: 0, life: kind === 'keep' ? 2.6 : 1.5, kind });
+}
+function updateMarks(dt) {
+  for (let i = marks.length - 1; i >= 0; i--) {
+    const k = marks[i]; k.t += dt;
+    const u = k.t / k.life;
+    if (u >= 1) { scene.remove(k.el); k.el.material.dispose(); marks.splice(i, 1); continue; }
+    k.el.material.opacity = k.kind === 'keep' ? 0.5 * (1 - u) : 0.7 * Math.sin(u * Math.PI) * (0.6 + 0.4 * Math.sin(u * 18));
+  }
+}
+
+// ---- the handoff: hand a block to Ru and a mote carries it over
+const parcels = [];
+function ruParcel(key) {
+  const m = byKey.get(key); if (!m || !guru.g || REDUCED) return;
+  const r = m.userData.cur;
+  const el = new THREE.Mesh(new THREE.IcosahedronGeometry(1.1, 0), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.9 }));
+  el.position.set(r.x + r.w / 2, m.scale.y + 3, r.z + r.h / 2);
+  scene.add(el);
+  parcels.push({ el, from: el.position.clone(), t: 0 });
+}
+function updateParcels(dt) {
+  for (let i = parcels.length - 1; i >= 0; i--) {
+    const p = parcels[i]; p.t += dt / 0.85;
+    if (p.t >= 1 || !guru.g) { scene.remove(p.el); p.el.material.dispose(); parcels.splice(i, 1); guru.glow = 1.4; continue; }
+    const u = p.t * p.t * (3 - 2 * p.t); // ease so it sets off slowly and arrives quickly
+    p.el.position.lerpVectors(p.from, guru.g.position, u);
+    p.el.position.y += Math.sin(u * Math.PI) * 10; // a lob rather than a straight line
+    p.el.rotation.x += dt * 4; p.el.rotation.y += dt * 3;
+    p.el.material.opacity = 0.9 * (1 - u * 0.4);
+  }
+}
+
 // blocks under a hovering chopper glow and lift a little, like they are being inspected
 function crewLift(m, u, dt) {
   let k = 0;
@@ -1427,6 +1544,9 @@ renderer.setAnimationLoop((now) => {
   controls.update();
   updateIdle(dt, now);
   updateCrew(dt, now); updateEscort(dt, now); updateHomeFlyers(dt, now);
+  // Ru drifts on the landing, and comes out over the map whenever its panel is open
+  ruShow((!$('#landing').hidden && !$('#landing').classList.contains('away')) || (mode === 'disk' && ru.open));
+  updateRuBody(dt, now); updateMarks(dt); updateParcels(dt);
   if (mode === 'mem' && memView !== 'orbit') return; // list view is plain HTML; give the GPU a rest
   updateWorld(dt, now);
   updateBlocks(dt, now); updateRipples(dt, now); updateSparks(dt); updateDust(dt, now);
@@ -2259,7 +2379,7 @@ for (const t of [ruEl, $('#ru-fab')]) {
   t.addEventListener('dragleave', () => t.classList.remove('drop'));
   t.addEventListener('drop', (e) => { e.preventDefault(); t.classList.remove('drop'); document.body.classList.remove('carrying'); const p = e.dataTransfer.getData(DND); if (p === null || p === undefined) return; ruTake(p); });
 }
-function ruTake(path, source = 'drop') { if (!ru.label) { openSettings(); return; } if (!ru.open) ruOpen('selection'); else { ru.area = 'selection'; ru.pinned = true; } ruSelAdd(path, { source }); toast(`Ru: got ${path.split('/').pop() || rootName}`, 'ru'); }
+function ruTake(path, source = 'drop') { if (!ru.label) { openSettings(); return; } if (!ru.open) ruOpen('selection'); else { ru.area = 'selection'; ru.pinned = true; } ruSelAdd(path, { source }); ruShow(true); ruParcel(path); toast(`Ru: got ${path.split('/').pop() || rootName}`, 'ru'); }
 const carry = { on: null, timer: null, ghost: $('#carry') };
 renderer.domElement.addEventListener('pointerdown', (e) => {
   clearTimeout(carry.timer);
@@ -2297,6 +2417,12 @@ function md(t) {
   return out.join('');
 }
 function ruAdd(who, text) { const m = document.createElement('div'); m.className = `m ${who}`; if (who === 'me') m.textContent = text; else m.innerHTML = md(text); ruMsgs.appendChild(m); ruMsgs.scrollTop = ruMsgs.scrollHeight; return m; }
+// Ru does not just report what it is checking, it goes and hovers over it
+let ruGaze = 0;
+function ruGazeNext() {
+  const keys = [...ru.sel.keys()].filter((k) => byKey.has(k));
+  ruLookAt(keys.length ? keys[ruGaze++ % keys.length] : null);
+}
 const toolLine = (c) => { const t = tilde(String(c ?? '')); return (rootPath ? t.replaceAll(rootPath + '/', '') : t).slice(0, 90); };
 // ---- verdicts: Ru ends an actionable answer with a ```dime JSON block; it becomes buttons instead of text
 const splitVerdict = (t) => { const i = t.indexOf('```dime'); if (i < 0) return [t, null]; const j = t.indexOf('```', i + 7); let v = null; try { v = JSON.parse(t.slice(i + 7, j < 0 ? undefined : j)); } catch {} return [t.slice(0, i).trimEnd(), v]; };
@@ -2334,6 +2460,8 @@ function renderVerdict(m, v) {
   // One button for the whole verdict: what Ru says can go joins the shortlist, what it says to keep
   // leaves it. Only the items that would actually change are counted, so the button is never a no-op.
   const [goRows, outside] = verdictRows(goPaths(v)), [keepRows] = verdictRows(v.keep);
+  for (const r of goRows) ruMark(r.key, 'go');
+  for (const r of keepRows) ruMark(r.key, 'keep');
   const add = goRows.filter((r) => !picked.has(r.key));
   // A keep is only kept if nothing on the shortlist still covers it. Ru usually names folders inside
   // one that Di flagged whole, and leaving that parent listed would move the kept item along with it,
@@ -2364,13 +2492,14 @@ async function ruAsk(q) {
   const transcript = ru.turns.slice(-8).map((t) => `${t.who === 'me' ? 'User' : 'Ru'}: ${t.text}`).join('\n\n');
   const prompt = `What the user is looking at in DiMe right now:\n\n${sentCtx}\n\n${transcript ? `Conversation so far:\n\n${transcript}\n\n` : ''}User: ${q}`;
   const m = ruAdd('ru', ''), status = document.createElement('div'); status.className = 'status'; status.textContent = 'Ru is thinking'; m.appendChild(status);
+  guru.busy = true; ruGaze = 0; ruGazeNext(); // the light quickens and it starts making its rounds
   let text = '', lastBlock = null, outOfTurns = false;
   const cap = () => { const c = document.createElement('div'); c.className = 'on'; c.textContent = `about ${about} · what Ru saw`; c.title = 'Show exactly what Ru was given for this answer'; c.onclick = () => { const p = c.nextElementSibling; if (p?.classList.contains('sent')) { p.remove(); return; } const pre = document.createElement('pre'); pre.className = 'sent'; pre.textContent = sentCtx; c.after(pre); }; return c; };
   const render = () => { m.innerHTML = md(splitVerdict(text)[0]); m.prepend(cap()); m.appendChild(status); ruMsgs.scrollTop = ruMsgs.scrollHeight; };
   const denied = [];
   const handle = (d) => {
     if (d.t === 'text') { text += d.d; render(); }
-    else if (d.t === 'tool') status.textContent = `Ru is checking ${toolLine(d.d)}`;
+    else if (d.t === 'tool') { status.textContent = `Ru is checking ${toolLine(d.d)}`; ruGazeNext(); }
     else if (d.t === 'denied') denied.push(d.d);
     else if (d.t === 'provider') ruEl.querySelector('.ctx .lbl').textContent = `via ${d.d}`;
     else if (d.t === 'done') { if (d.turns) outOfTurns = true; if (d.error && !text.trim()) text = d.error; }
@@ -2390,6 +2519,7 @@ async function ruAsk(q) {
   const [shown, verdict] = splitVerdict(text);
   m.innerHTML = md(shown || 'Ru said nothing.'); m.prepend(cap()); if (verdict) renderVerdict(m, verdict); ruMsgs.scrollTop = ruMsgs.scrollHeight;
   ru.turns.push({ who: 'me', text: q }, { who: 'ru', text: shown }); ruEl.querySelector('.clear').hidden = false; // turns live for this session only
+  guru.busy = false; ruLookAt(null); // back to drifting
   ru.busy = false; ru.abort = null; ruSend.classList.remove('stop'); ruSend.textContent = 'Ask'; ruSend.title = ''; ruIn.focus();
   if (outOfTurns && !verdict && !q.startsWith('Ru ran out of checks')) ruAsk('Ru ran out of checks before answering. Give the verdict now from what you found, no more checks.'); // one follow-up, with the transcript, so the work is not lost
 }
