@@ -10,6 +10,7 @@
     --bg: #0D1321; --ink: #E8E6DF; --ink-2: #9AA3B8; --ink-3: #5B6680;
     --blue: #3B6FB6; --violet: #8A5BC7; --hot: #FF7A3D; --line: rgba(232,230,223,.1);
     --pw: 384px; --panel: rgba(16, 22, 38, .72); --teal: #4FD1C5; --gold: #F5C26B; --rose: #E8457A;
+    --red: #D1333A; --red-lit: #FF6169;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -137,6 +138,9 @@
   .btn.hot { background: var(--hot); }
   .btn.quiet { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
   .btn.hot.quiet { color: var(--hot); border-color: rgba(255,122,61,.45); }
+  .btn.go { background: var(--blue); color: #fff; }
+  .btn.danger { background: var(--red); color: #fff; }
+  .btn.danger.quiet { background: transparent; color: var(--red-lit); border: 1px solid rgba(255,97,105,.45); }
   #panel { transition: opacity .5s ease, transform .5s ease; }
   #panel.away { opacity: 0; transform: translateX(24px); pointer-events: none; }
 

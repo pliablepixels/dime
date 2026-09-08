@@ -1028,10 +1028,15 @@ function listDialog(rows, sub) {
   const idle = filter === 'idle', days = idleDays >= 365 ? 'a year' : `${idleDays} days`;
   sub ??= `Nothing has moved yet. Checked items are what the buttons act on. Shelving moves them to ~/.dime/shelf, where they stay on your disk until you delete them, so nothing is freed yet and everything can go back${idle ? `. In this idle view only the files inside each item untouched for ${days}+ move` : ''}. Delete asks again.`;
   openDialog({ title: 'Shortlist', sub, rows, select: true, actions: [
-    { cls: 'hot quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the shelf.` : 'Removed from disk right away. Not the Trash, not the shelf.', rows: c, select: false, gate: 'I understand this cannot be undone. Shelve it instead if unsure.',
-      actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/delete', { paths: x.map((r) => r.key), ...idleOpt() }, 'deleted') }] }) },
-    { label: (c) => `Shelve ${c.length} · ${fmt(sumOf(c))}`, fn: (c) => act('/api/shelf/add', { paths: c.map((r) => r.key), ...idleOpt() }, 'shelved') },
+    { cls: 'go', label: (c) => `Shelve ${c.length} · ${fmt(sumOf(c))}`, fn: (c) => act('/api/shelf/add', { paths: c.map((r) => r.key), ...idleOpt() }, 'shelved') },
+    { cls: 'danger quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the shelf.` : 'Removed from disk right away. Not the Trash, not the shelf.', rows: c, select: false, gate: 'I understand this cannot be undone. Shelve it instead if unsure.',
+      actions: [{ cls: 'danger', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/delete', { paths: x.map((r) => r.key), ...idleOpt() }, 'deleted') }] }) },
   ] });
+  if (rows.length) { // emptying the shortlist moves nothing, so it needs no confirmation
+    const clr = document.createElement('button'); clr.type = 'button'; clr.className = 'btn sm quiet'; clr.textContent = 'Clear shortlist'; clr.style.marginRight = 'auto';
+    clr.onclick = () => { picked.clear(); dlg.close(); if (current) renderCleanup(); else renderPickBar(); toast('Di: shortlist cleared', 'du'); };
+    dlg.querySelector('.foot').prepend(clr);
+  }
 }
 async function openShelf() {
   try { shelfList = await api('/api/shelf'); } catch (e) { toast(e.message); return; }
@@ -1040,8 +1045,8 @@ async function openShelf() {
     rows, select: true,
     actions: [
       { label: (c) => `Put back ${c.length}`, fn: (c) => act('/api/shelf/restore', { ids: c.map((r) => r.key) }, 'put back') },
-      { cls: 'hot', label: (c) => `Delete ${c.length} for good…`, fn: (c) => openDialog({ title: 'Delete for good', sub: 'Removed from the shelf and from your disk. This is the step that frees the space.', rows: c, select: false, gate: 'I understand this cannot be undone.',
-        actions: [{ cls: 'hot', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/shelf/delete', { ids: x.map((r) => r.key) }, 'deleted') }] }) },
+      { cls: 'danger', label: (c) => `Delete ${c.length} for good…`, fn: (c) => openDialog({ title: 'Delete for good', sub: 'Removed from the shelf and from your disk. This is the step that frees the space.', rows: c, select: false, gate: 'I understand this cannot be undone.',
+        actions: [{ cls: 'danger', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/shelf/delete', { ids: x.map((r) => r.key) }, 'deleted') }] }) },
     ] });
   if (rows.length) { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn sm ru'; b.textContent = '✦ Ask Ru'; b.style.marginRight = 'auto'; b.onclick = () => { dlg.close(); ruOpen('shelf'); }; dlg.querySelector('.foot').prepend(b); }
 }
