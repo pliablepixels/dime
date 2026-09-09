@@ -13,7 +13,8 @@ const api = async (url, body) => {
   if (!r.ok) throw new Error(await r.text());
   return r.headers.get('content-type')?.includes('json') ? r.json() : null;
 };
-const fmt = (b) => { const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++; } return (i ? b.toFixed(b < 10 ? 1 : 0) : b) + ' ' + u[i]; };
+// steps up at 1000 rather than 1024, so a total of 1020 MB reads as 1.0 GB instead of four digits
+const fmt = (b) => { const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (b >= 1000 && i < 4) { b /= 1024; i++; } return (i ? b.toFixed(b < 10 ? 1 : 0) : b) + ' ' + u[i]; };
 const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n);
 // A folder still being counted shows whole megabytes, because gigabytes tick over far too slowly to
 // read as progress. The moment it is done, fmt takes over and picks the unit that fits.
@@ -1274,6 +1275,7 @@ const KIND_HINT = {
   archives: 'Old app builds from Xcode', models: 'Re-downloaded on demand', backups: 'Manage from Finder', idlefile: 'Not opened or changed for that long', ru: 'Nominated by Ru',
 };
 const specific = (note) => /Idle|Same name|No changes/.test(note);
+const RU_GROUP_MAX = 20; // how much of one group a drag hands Ru
 const openKinds = new Set(); let kindsTouched = false; // once you fold or unfold a group yourself, the default 'first two open' stops applying
 
 // the candidate list the panel works from: Di's flags, and in the idle view only those untouched long enough plus Di's untouched files
@@ -1337,6 +1339,10 @@ function renderCleanup() {
     pall.textContent = allIn ? 'remove all from list' : 'add all to list';
     pall.onclick = (e) => { e.preventDefault(); e.stopPropagation(); for (const c of items) allIn ? picked.delete(c.path) : picked.set(c.path, c); renderCleanup(); };
     d.querySelector('summary').lastElementChild.appendChild(pall);
+    // a whole group can go to Ru at once. Capped: each item costs Ru a lookup and a paragraph of context
+    const send = items.slice(0, RU_GROUP_MAX);
+    dragSource(d.querySelector('summary'), send.map((c) => c.path));
+    d.querySelector('summary').title = `Drag onto Ru to ask about ${send.length < items.length ? `the biggest ${send.length} of these` : send.length === 1 ? 'this one' : `these ${send.length}`}`;
     for (const c of items) d.appendChild(candRowEl(c, base, 0));
     groups.appendChild(d);
   });
@@ -2648,6 +2654,10 @@ function ruCtxLine() {
   else if (!A.find((x) => x.id === ru.area)?.on) ru.area = on[0]?.id ?? 'folder';
   const el = ruEl.querySelector('.subs'); el.innerHTML = '';
   for (const x of A) { const b = document.createElement('button'); b.type = 'button'; b.textContent = x.label; b.disabled = !x.on; b.title = x.id === ru.area ? `Ru is looking at this (${x.hint})` : x.on ? `Switch Ru to this (${x.hint})` : `Nothing here yet (${x.hint})`; b.setAttribute('aria-pressed', String(x.id === ru.area)); b.onclick = () => { ru.area = x.id; ru.pinned = true; ruCtxLine(); ruSuggest(); }; el.appendChild(b); }
+  // the hint stands until you have actually dragged or sent something in: a map click or a Cleanup
+  // tick fills the Selection on its own and is not what the hint is teaching
+  const hint = ruEl.querySelector('.drophint');
+  hint.hidden = !(mode === 'disk' && ![...ru.sel.values()].some((it) => it.source === 'drop' || it.source === 'menu'));
   const chips = ruEl.querySelector('.selrow'); chips.innerHTML = '';
   chips.hidden = !(mode === 'disk' && ru.area === 'selection' && ru.sel.size > 1);
   for (const it of ru.sel.values()) { const c = document.createElement('span'); c.className = `chip ${it.source}`; c.innerHTML = `<b></b><small></small><button type="button" aria-label="Remove">×</button>`; c.querySelector('b').textContent = it.name + (it.is_dir ? '/' : ''); c.querySelector('small').textContent = it.ready ? fmt(it.size) : '…'; c.title = `${absOf(it.path)} · ${{ map: 'selected on the map', tick: 'ticked in Cleanup', drop: 'dragged in', menu: 'sent from a menu' }[it.source]}`; c.querySelector('button').onclick = () => ruSelRemove(it.path); chips.appendChild(c); }
@@ -2787,13 +2797,21 @@ ruIn.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefau
 ruIn.oninput = () => { ruIn.style.height = 'auto'; ruIn.style.height = `${Math.min(120, ruIn.scrollHeight)}px`; };
 // ---- drops: sidebar rows drag natively; map blocks are carried with press-and-hold (a native drag would fight the camera)
 const DND = 'text/dime-path';
-function dragSource(el, path) { el.draggable = true; el.addEventListener('dragstart', (e) => { e.dataTransfer.setData(DND, path); e.dataTransfer.effectAllowed = 'copy'; document.body.classList.add('carrying'); }); el.addEventListener('dragend', () => document.body.classList.remove('carrying')); }
+function dragSource(el, path) { const paths = [].concat(path); el.draggable = true; el.addEventListener('dragstart', (e) => { e.dataTransfer.setData(DND, paths.join('\n')); e.dataTransfer.effectAllowed = 'copy'; document.body.classList.add('carrying'); }); el.addEventListener('dragend', () => document.body.classList.remove('carrying')); }
 for (const t of [ruEl, $('#ru-fab')]) {
   t.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes(DND)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; t.classList.add('drop'); } });
   t.addEventListener('dragleave', () => t.classList.remove('drop'));
-  t.addEventListener('drop', (e) => { e.preventDefault(); t.classList.remove('drop'); document.body.classList.remove('carrying'); const p = e.dataTransfer.getData(DND); if (p === null || p === undefined) return; ruTake(p); });
+  t.addEventListener('drop', (e) => { e.preventDefault(); t.classList.remove('drop'); document.body.classList.remove('carrying'); const p = e.dataTransfer.getData(DND); if (p === null || p === undefined) return; ruTakeAll(p.split('\n')); });
 }
-function ruTake(path, source = 'drop') { if (!ru.label) { openSettings(); return; } if (!ru.open) ruOpen('selection'); else { ru.area = 'selection'; ru.pinned = true; } ruSelAdd(path, { source }); ruShow(true); ruParcel(path); toast(`Ru: got ${path.split('/').pop() || rootName}`, 'ru'); }
+const ruTake = (path, source = 'drop') => ruTakeAll([path], source);
+function ruTakeAll(paths, source = 'drop') {
+  if (!ru.label) { openSettings(); return; }
+  if (!ru.open) ruOpen('selection'); else { ru.area = 'selection'; ru.pinned = true; }
+  for (const p of paths) ruSelAdd(p, { source });
+  ruShow(true);
+  for (const p of paths.slice(0, 6)) ruParcel(p); // a parcel each would swamp the screen for a whole group
+  toast(paths.length === 1 ? `Ru: got ${paths[0].split('/').pop() || rootName}` : `Ru: got ${paths.length} items`, 'ru');
+}
 const carry = { on: null, timer: null, ghost: $('#carry') };
 renderer.domElement.addEventListener('pointerdown', (e) => {
   clearTimeout(carry.timer);

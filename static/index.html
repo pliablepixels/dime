@@ -541,6 +541,7 @@
   #ru .subs button:hover { color: var(--ink); border-color: rgba(232,230,223,.4); }
   #ru .subs button[aria-pressed="true"] { color: var(--bg); background: var(--ru); border: 1px solid var(--ru); box-shadow: 0 0 12px rgba(201,179,255,.35); }
   #ru .subs button:disabled { opacity: .4; cursor: default; }
+  #ru .drophint { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); opacity: .8; }
   #ru .selrow { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 0; }
   #ru .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 9px; border-radius: 999px; background: rgba(201,179,255,.1); border: 1px solid rgba(201,179,255,.28); font-size: 12px; max-width: 100%; }
   #ru .chip b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; } #ru .chip small { color: var(--ink-3); }
@@ -758,6 +759,7 @@
       <div class="fl"><span class="k">Looking at</span><div class="subs"></div></div>
       <div class="fs"></div>
       <div class="fd"><span class="sum"></span><button class="more" type="button">show what Ru sees</button></div>
+      <div class="drophint" hidden>Drag a row or a group header here. Or hold a block on the map.</div>
       <div class="selrow" hidden></div>
       <pre hidden></pre>
     </div>
