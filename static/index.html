@@ -177,6 +177,8 @@
   body.busy, body.busy canvas { cursor: progress !important; }
   #crumbs .sep { opacity: .5; }
   #stats { color: var(--ink-2); font-size: 13px; pointer-events: none; }
+  #stats .stopscan { pointer-events: auto; margin-left: 8px; padding: 2px 9px; border-radius: 999px; border: 1px solid rgba(255,122,61,.45); background: rgba(255,122,61,.10); color: var(--hot); font-size: 11px; font-weight: 700; }
+  #stats .stopscan:hover { background: rgba(255,122,61,.2); }
   #stats:empty { display: none; }
   #stats.live { font-size: 22px; color: var(--ink); font-weight: 600; }
   #hid { pointer-events: auto; margin-left: 10px; vertical-align: 1px; background: rgba(232,230,223,.06); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 11px; color: var(--ink-2); }

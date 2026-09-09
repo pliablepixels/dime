@@ -196,6 +196,7 @@ async fn serve() -> String {
         .route("/api/drives", get(drives))
         .route("/api/ls", get(ls))
         .route("/api/scan", post(start_scan))
+        .route("/api/scan/stop", post(stop_scan))
         .route("/api/resume", post(resume))
         .route("/api/state", get(state_get).post(state_set))
         .route("/api/status", get(status))
@@ -309,6 +310,16 @@ struct PathReq {
     path: String,
 }
 
+/// Give up on a running scan. The walk checks a flag at every directory, so it stops within a beat
+/// and the map goes back to where it was rather than showing a half-counted tree.
+async fn stop_scan(State(app): State<Shared>) -> StatusCode {
+    let running = matches!(*app.scan.lock().unwrap(), ScanState::Scanning(..));
+    if running {
+        scan::stop_scan();
+    }
+    if running { StatusCode::ACCEPTED } else { StatusCode::NO_CONTENT }
+}
+
 async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<StatusCode, ApiErr> {
     let root = PathBuf::from(&req.path).canonicalize().map_err(|e| bad(format!("{}: {e}", req.path)))?;
     if !root.is_dir() {
@@ -328,6 +339,12 @@ async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Resu
         let tree = scan::scan(&root, &progress);
         let scanned = t0.elapsed();
         let t1 = std::time::Instant::now();
+        if progress.stopped() || scan::was_stopped() {
+            *app2.scan.lock().unwrap() = ScanState::Idle; // abandoned: keep no half-counted tree
+            app2.version.fetch_add(1, Ordering::Relaxed);
+            println!("  scan cancelled");
+            return;
+        }
         let _ = snapshot::save(&root, &tree); // next launch opens this map at once
         println!("  scanned {} files, {:.1} GB in {:.1}s; snapshot in {:.1}s", tree.files, tree.size as f64 / 1e9, scanned.as_secs_f64(), t1.elapsed().as_secs_f64());
         *app2.watcher.lock().unwrap() = watch(&app2, &root);

@@ -36,6 +36,17 @@ pub struct Item {
 
 pub struct Progress {
     pub items: Vec<Item>,
+    /// Set when the user gives up on a scan. Checked at every directory, so a walk of millions of
+    /// files stops within a beat rather than running to the end.
+    pub stop: AtomicBool,
+}
+impl Progress {
+    pub fn cancel(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
 }
 
 impl Progress {
@@ -60,13 +71,22 @@ impl Progress {
                     .collect()
             })
             .unwrap_or_default();
-        Progress { items }
+        Progress { items, stop: AtomicBool::new(false) }
     }
 }
 
 /// Directories macOS itself refused, which is what Full Disk Access fixes. Reset at the start of
 /// every scan and read once it finishes. One scan at a time, so a single counter is enough.
 static DENIED: AtomicU64 = AtomicU64::new(0);
+/// Mirror of the running scan's cancel flag, so the deep walk can see it without threading a
+/// reference through every level. One scan at a time, so one flag is enough.
+static STOP: AtomicBool = AtomicBool::new(false);
+pub fn stop_scan() {
+    STOP.store(true, Ordering::Relaxed);
+}
+pub fn was_stopped() -> bool {
+    STOP.load(Ordering::Relaxed)
+}
 pub fn denied() -> u64 {
     DENIED.load(Ordering::Relaxed)
 }
@@ -106,6 +126,7 @@ pub fn skip_list(root: &Path) -> Vec<PathBuf> {
 }
 pub fn scan(root: &Path, progress: &Progress) -> Node {
     DENIED.store(0, Ordering::Relaxed);
+    STOP.store(false, Ordering::Relaxed);
     let skip = skip_list(root);
     let own = fs::symlink_metadata(root).ok();
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
@@ -234,6 +255,9 @@ fn bulk_entries(path: &Path) -> std::io::Result<Vec<Ent>> {
 }
 
 fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[AtomicU64; 10], dev: u64, skip: &[PathBuf]) -> Node {
+    if STOP.load(Ordering::Relaxed) {
+        return Node { name: name_of(path), size: 0, mtime: 0, atime: 0, is_dir: true, files: 0, children: vec![] };
+    }
     if std::env::var_os("DIME_SLOW_SCAN").is_some() { return scan_dir_slow(path, bytes, counter, types, dev, skip); }
     let Ok(ents) = bulk_entries(path) else { return scan_dir_slow(path, bytes, counter, types, dev, skip) };
     let own = fs::symlink_metadata(path).ok();
@@ -272,6 +296,9 @@ fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[Atomic
 
 /// The portable walk: readdir plus one lstat per entry. Used when the bulk call is refused (some network and FUSE volumes).
 fn scan_dir_slow(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[AtomicU64; 10], dev: u64, skip: &[PathBuf]) -> Node {
+    if STOP.load(Ordering::Relaxed) {
+        return Node { name: name_of(path), size: 0, mtime: 0, atime: 0, is_dir: true, files: 0, children: vec![] };
+    }
     let own = fs::symlink_metadata(path).ok();
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
     let entries: Vec<fs::DirEntry> = match fs::read_dir(path) {

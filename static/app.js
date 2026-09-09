@@ -1702,8 +1702,11 @@ async function watchScan() {
   for (;;) {
     const s = await api('/api/status');
     if (s.state === 'done') return s;
-    if (s.state !== 'scanning') throw new Error('scan stopped');
+    if (s.state !== 'scanning' && s.state !== 'idle') throw new Error('scan stopped');
+    if (s.state === 'idle') throw new Error('cancelled'); // the user gave up on it
     $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmt(s.size)}`;
+    $('#stats').insertAdjacentHTML('beforeend', ' <button class="stopscan" type="button">Stop</button>');
+    $('#stats').querySelector('.stopscan').onclick = () => { api('/api/scan/stop', {}).catch(() => {}); toast('Di: calling the search party back', 'du'); };
     if (mode === 'disk') { setBlocks(entriesFor(s.live, { live: true })); crewAssign(s.live); }
     await sleep(120);
   }
@@ -1748,7 +1751,8 @@ async function startScan(path) {
     await watchScan();
     await finishScan();
   } catch (err) {
-    $('#err').textContent = err.message; $('#landing').hidden = false; $('#landing').classList.remove('away'); scanning = false; delete document.body.dataset.scanning;
+    if (err.message !== 'cancelled') $('#err').textContent = err.message; // giving up on purpose is not an error to shout about
+    $('#landing').hidden = false; $('#landing').classList.remove('away'); scanning = false; delete document.body.dataset.scanning;
   } finally { $('#scanbtn').disabled = false; }
 }
 $('#scanform').onsubmit = (e) => { e.preventDefault(); startScan($('#path').value); };
