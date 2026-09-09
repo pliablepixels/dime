@@ -53,8 +53,9 @@ Save to `dist/notes-v<version>.md` (dist is gitignored, so it does not pollute t
 - Then `## What's new`, `## Fixed`, `## Under the hood` - only the sections that have
   content. One line per item, what the user sees, not the code that moved.
 - Numbers that were actually measured belong here; invented ones never do.
-- Close with `**Full Changelog**: https://github.com/pliablepixels/dime/compare/<last-tag>...v<version>`.
 - No emoji, no "we are excited", no feature the release does not contain.
+- Do not write a changelog link or a commit list. GitHub generates that and it is appended
+  below whatever this file says, so writing one yourself duplicates it.
 
 Show the notes to the user before publishing.
 
@@ -66,8 +67,8 @@ make release V=<version> NOTES=dist/notes-v<version>.md
 
 That bumps `Cargo.toml`, commits, tags, pushes master and the tag, builds the universal
 binary and the signed-ad-hoc app bundle, and creates the GitHub release with both
-artifacts attached. Without `NOTES` it falls back to generated notes, which is not what
-this skill is for.
+artifacts attached. The body is the summary followed by GitHub's own generated changelog;
+without `NOTES` it is the changelog alone, which is not what this skill is for.
 
 If it fails partway, find out how far it got before retrying: the tag and the push may
 already exist (`git tag -d` and `git push --delete origin <tag>` undo them), and
