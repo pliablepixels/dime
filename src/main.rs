@@ -362,7 +362,7 @@ async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Resu
         let tree = scan::scan(&root, &progress);
         let scanned = t0.elapsed();
         let t1 = std::time::Instant::now();
-        if progress.stopped() || scan::was_stopped() {
+        if scan::was_stopped() {
             *app2.scan.lock().unwrap() = ScanState::Idle; // abandoned: keep no half-counted tree
             app2.version.fetch_add(1, Ordering::Relaxed);
             println!("  scan cancelled");

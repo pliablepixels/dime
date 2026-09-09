@@ -36,17 +36,6 @@ pub struct Item {
 
 pub struct Progress {
     pub items: Vec<Item>,
-    /// Set when the user gives up on a scan. Checked at every directory, so a walk of millions of
-    /// files stops within a beat rather than running to the end.
-    pub stop: AtomicBool,
-}
-impl Progress {
-    pub fn cancel(&self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
-    pub fn stopped(&self) -> bool {
-        self.stop.load(Ordering::Relaxed)
-    }
 }
 
 impl Progress {
@@ -71,15 +60,16 @@ impl Progress {
                     .collect()
             })
             .unwrap_or_default();
-        Progress { items, stop: AtomicBool::new(false) }
+        Progress { items }
     }
 }
 
 /// Directories macOS itself refused, which is what Full Disk Access fixes. Reset at the start of
 /// every scan and read once it finishes. One scan at a time, so a single counter is enough.
 static DENIED: AtomicU64 = AtomicU64::new(0);
-/// Mirror of the running scan's cancel flag, so the deep walk can see it without threading a
-/// reference through every level. One scan at a time, so one flag is enough.
+/// Set when the user gives up on a scan, and checked at every directory so a walk of millions of
+/// files unwinds within a beat. A single flag rather than one per scan, because ScanState only ever
+/// allows one to run.
 static STOP: AtomicBool = AtomicBool::new(false);
 pub fn stop_scan() {
     STOP.store(true, Ordering::Relaxed);
