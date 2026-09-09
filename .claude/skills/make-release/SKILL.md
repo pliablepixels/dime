@@ -49,15 +49,23 @@ git log <last-tag>..HEAD --format='%h %s%n%b'
 
 Save to `dist/notes-v<version>.md` (dist is gitignored, so it does not pollute the tree):
 
-- Open with two or three sentences on what this release is about. No heading above it.
+**Bullets, all the way down. No prose paragraphs anywhere in the file.**
+
+- Open with one to three bullets saying what this release is about, under no heading.
 - Then `## What's new`, `## Fixed`, `## Under the hood` - only the sections that have
-  content. One line per item, what the user sees, not the code that moved.
+  content, each one nothing but bullets.
+- One bullet is one line and one idea: what the user sees, not the code that moved. Lead
+  with the thing itself, in bold if it needs a name. Two sentences at the very most, and
+  only when the second one carries a measured number.
 - Numbers that were actually measured belong here; invented ones never do.
 - No emoji, no "we are excited", no feature the release does not contain.
 - Do not write a changelog link or a commit list. GitHub generates that and it is appended
   below whatever this file says, so writing one yourself duplicates it.
 
-Show the notes to the user before publishing.
+Show the user the file as written, bullets and all. Do not re-flow it into paragraphs for
+the chat: they are approving the text that ships.
+
+Wait for the user's go-ahead before publishing.
 
 ## 4. Release
 
