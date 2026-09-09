@@ -23,7 +23,10 @@ pub struct Rule {
     #[serde(default)]
     pub ext: Vec<String>,
     pub parent_ends_with: Option<String>,
-    pub under: Option<String>,
+    /// Any of these as an ancestor folder's name. A list, because one rule usually covers several
+    /// tools laid out the same way, and teaching DiMe a new one should be adding a word.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub under: Vec<String>,
     #[serde(default)]
     pub has_child: Vec<String>,
     /// Names that must sit *beside* the item, in the same folder. A node_modules next to a
@@ -37,11 +40,16 @@ pub struct Rule {
     pub min_size: u64,
     #[serde(default)]
     pub min_age_days: i64,
-    /// The tool that owns this, if one does. `ollama rm {name}` means DiMe must not unlink the
-    /// files itself: it runs that command, so the tool's own bookkeeping stays in step. Without it
-    /// Ollama keeps listing a model whose weights DiMe removed behind its back.
+    /// The tool that owns this, if one does. Deleting then runs this command instead of unlinking
+    /// files, so the tool's own bookkeeping stays in step: remove Ollama's blobs by hand and
+    /// `ollama ls` goes on listing a model whose weights are gone.
     ///
-    /// Split on whitespace into argv and run without a shell; `{name}` becomes one argument.
+    /// Split on whitespace into argv and run without a shell, so each placeholder is one argument:
+    ///   `{name}`  what the thing is called on disk, filled in for any rule.
+    ///   `{model}` the name the tool knows it by, when DiMe can work that out. Only Ollama needs
+    ///             this, because it addresses weights by hash; anything storing a model as a
+    ///             recognisably named folder wants `{name}`.
+    /// A command still holding a placeholder DiMe could not fill is never run.
     /// It runs as you, from a file only you can write, so it can run anything you can.
     pub remove_with: Option<String>,
     /// This is a container, not a thing to remove: match it only to say "keep looking inside".
@@ -51,6 +59,16 @@ pub struct Rule {
 }
 fn one() -> f64 {
     1.0
+}
+/// `under = ".claude"` and `under = [".claude", ".codex"]` both mean the same kind of thing.
+fn one_or_many<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum V { One(String), Many(Vec<String>) }
+    Ok(match V::deserialize(d)? {
+        V::One(s) => vec![s],
+        V::Many(v) => v,
+    })
 }
 
 #[derive(Deserialize, Default)]
@@ -122,7 +140,7 @@ impl Rule {
             && (self.name.is_empty() || self.name.iter().any(|n| n == it.name))
             && (self.ext.is_empty() || self.ext.iter().any(|e| e == it.ext))
             && self.parent_ends_with.as_deref().is_none_or(|p| it.parent.ends_with(p))
-            && self.under.as_deref().is_none_or(|u| it.parent.split('/').any(|s| s == u))
+            && (self.under.is_empty() || it.parent.split('/').any(|s| self.under.iter().any(|u| u == s)))
             && (self.has_child.is_empty() || it.children.iter().any(|c| self.has_child.contains(c)))
             && (self.has_sibling.is_empty() || it.siblings.iter().any(|c| self.has_sibling.contains(c)))
             && !it.siblings.iter().any(|c| self.no_sibling.contains(c))
@@ -284,7 +302,7 @@ min_size = "1 MB"
         let blob = Item { ..item("sha256-abc", false, 5 << 30, 40, "Users/x/.ollama/models/blobs") };
         let r = hit(&blob);
         assert_eq!(r.id, "ollama-model");
-        assert_eq!(r.remove_with.as_deref(), Some("ollama rm {name}"), "Ollama removes its own models");
+        assert_eq!(r.remove_with.as_deref(), Some("ollama rm {model}"), "Ollama removes its own models");
         assert!(r.note.contains("ollama create"), "says when nothing will bring it back");
     }
 }

@@ -90,12 +90,34 @@ min_age_days = 30
 
 All matchers are optional and every one given must hold: `name`, `ext`, `parent_ends_with`, `under` (an ancestor folder's name), `has_child` (names directly inside), `has_sibling` and `no_sibling` (names beside it), `min_size`, `min_age_days`. `descend = true` marks a folder as a container to look inside rather than something to remove. The header of the built-in file documents each. A broken file is reported on stderr and ignored.
 
-Some things are not DiMe's to delete. A rule can name the tool that owns them:
+### Teaching DiMe a new tool
+
+New model runners and coding agents appear constantly. Adding one is a rule, not a patch.
+
+Say `newtool` keeps models in `~/.newtool/models`, one folder each, and removes them with `newtool remove <name>`:
 
 ```toml
-remove_with = "ollama rm {name}"
+[[rule]]
+id = "newtool-model"
+tier = "review"
+what = "NewTool models"
+note = "Pulled again on demand. {idle}"
+dir = true
+parent_ends_with = ".newtool/models"
+min_size = "200 MB"
+remove_with = "newtool remove {name}"
 ```
 
-Deleting such an item runs that command instead of unlinking files, so the tool's own index stays right: remove Ollama's blobs by hand and `ollama ls` goes on listing a model whose weights are gone. `{name}` is filled in with the name DiMe worked out, the command runs without a shell, and shelving is refused for these, since there is no reversible half of `ollama rm`. It only applies to the store the `ollama` command actually talks to; a copy of a store on another drive is removed as plain files.
+`remove_with` is the important line. Deleting such an item runs that command instead of unlinking files, so the tool's own index stays right: remove Ollama's blobs by hand and `ollama ls` goes on listing a model whose weights are gone. `{name}` is filled in with the folder's own name, the command is split into arguments and run without a shell, and shelving is refused for these, because there is no reversible half of a removal a tool performs itself. A command whose placeholders DiMe could not fill is never run.
+
+For a coding agent, there is usually nothing to write at all. One rule covers every agent that keeps sessions and caches the same way, so a new one is a word:
+
+```toml
+under = [".claude", ".codex", ".gemini", ".yours"]
+```
+
+Two habits worth copying from the built-ins. Put anything a download cannot restore in `note`, which is inventory shown without a suggestion: transcripts, vector stores, training output. And split a tool's folder in two, so the disposable half is still offered while its memory is not.
+
+What still needs code, in `src/gunk.rs`: naming a store that addresses files by hash rather than by name, as Ollama does, and noticing when its bookkeeping has gone stale. Everything else is data.
 
 Backend: Rust (axum, rayon, sysinfo, notify), in a WKWebView window via wry. Frontend: one HTML + one JS file, no build step. Three.js and the webfont are vendored under `static/vendor` and baked into the binary, so DiMe never touches the network.

@@ -87,7 +87,7 @@ dir = false
 parent_ends_with = ".ollama/models/blobs"
 min_size = "200 MB"
 # Ollama keeps its own index. Unlink a blob and `ollama ls` still lists the model, so let Ollama do it.
-remove_with = "ollama rm {name}"
+remove_with = "ollama rm {model}"
 
 [[rule]]
 id = "hf-model"
@@ -217,19 +217,9 @@ what = "Agent transcripts & memory"
 note = "Everything a coding agent remembers: past sessions, and what resuming one reads back. Nothing regenerates it. {idle}"
 weight = 1.0
 dir = true
-name = ["projects", "sessions", "file-history", "history", "todos"]
-under = ".codex"
-min_size = "20 MB"
-
-[[rule]]
-id = "agent-sessions"
-tier = "note"
-what = "Agent transcripts & memory"
-note = "Everything a coding agent remembers: past sessions, and what resuming one reads back. Nothing regenerates it. {idle}"
-weight = 1.0
-dir = true
-name = ["projects", "sessions", "file-history", "history", "todos"]
-under = ".claude"
+name = ["projects", "sessions", "file-history", "history", "todos", "memory"]
+# every coding agent DiMe knows about; adding another is adding a word
+under = [".claude", ".codex", ".gemini", ".cursor", ".aider", ".continue", ".opencode", ".amp", ".goose", ".windsurf"]
 min_size = "20 MB"
 
 # The disposable half of the same folders: caches and snapshots an agent rebuilds by itself.
@@ -240,19 +230,8 @@ what = "Agent caches & snapshots"
 note = "Working files a coding agent rebuilds on its own. No conversation lives here. {idle}"
 weight = 1.5
 dir = true
-name = ["shell-snapshots", "statsig", "cache", "logs"]
-under = ".claude"
-min_size = "20 MB"
-
-[[rule]]
-id = "agent-scratch"
-tier = "likely"
-what = "Agent caches & snapshots"
-note = "Working files a coding agent rebuilds on its own. No conversation lives here. {idle}"
-weight = 1.5
-dir = true
-name = ["shell-snapshots", "statsig", "cache", "logs"]
-under = ".codex"
+name = ["shell-snapshots", "statsig", "cache", "logs", "tmp", "downloads"]
+under = [".claude", ".codex", ".gemini", ".cursor", ".aider", ".continue", ".opencode", ".amp", ".goose", ".windsurf"]
 min_size = "20 MB"
 
 [[rule]]

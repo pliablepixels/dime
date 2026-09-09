@@ -293,7 +293,7 @@ fn name_ollama(base: &Path, out: &mut Vec<Candidate>, served: Option<PathBuf>) {
     for c in out.iter_mut().filter(|c| c.reason == "ollama-model") {
         if let Some((model, total, ours)) = map.get(&base.join(&c.path)) {
             // only the served store: elsewhere the command would remove the wrong copy
-            c.remove_cmd = ours.then(|| c.remove_cmd.as_ref().map(|t| t.replace("{name}", model))).flatten();
+            c.remove_cmd = ours.then(|| c.remove_cmd.as_ref().map(|t| t.replace("{model}", model))).flatten();
             c.name = model.clone();
             let how = if *ours {
                 format!("Deleting this hands it to Ollama as `ollama rm {model}`, so its own list stays right. That is final: a pulled model downloads again, one you built with `ollama create` does not.")
@@ -352,14 +352,14 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             is_dir: c.is_dir,
             score: c.size as f64 * rule.weight * (1.0 + age as f64 / 365.0),
             full_size: None,
-            remove_cmd: rule.remove_with.clone(),
+            remove_cmd: rule.remove_with.as_ref().map(|t| t.replace("{name}", &c.name)),
         };
         if !c.is_dir && c.size >= 5 * MB {
             // duplicates need state across the walk, so this one stays built in
             let key = (c.size, c.name.clone());
             if let Some((other, other_m)) = w.seen.get(&key).cloned() {
                 if other_m >= c.mtime {
-                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false, remove_with: None };
+                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: vec![], has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false, remove_with: None };
                     w.out.push(mk(&dup, format!("Same name and size as {other}.")));
                     continue;
                 }
@@ -444,7 +444,7 @@ mod tests {
             is_dir: false,
             score: 0.0,
             full_size: None,
-            remove_cmd: Some("ollama rm {name}".into()),
+            remove_cmd: Some("ollama rm {model}".into()),
         };
         let mut out = vec![blob.clone()];
         name_ollama(&dir, &mut out, None);
@@ -469,7 +469,19 @@ mod tests {
         assert!(out.is_empty());
 
         // a rule's command is not runnable until the name it asks for is known
-        assert!(!runnable("ollama rm {name}"));
+        assert!(!runnable("ollama rm {model}"));
+
+        // the plain case needs no code at all: a store that keeps one folder per model gets its
+        // command filled in from the folder's own name, so a new tool is a rule and nothing else
+        let r = Rule {
+            id: "newtool-model".into(), tier: "review".into(), what: "NewTool models".into(), note: String::new(),
+            weight: 1.0, dir: Some(true), name: vec![], ext: vec![], parent_ends_with: Some(".newtool/models".into()),
+            under: vec![], has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0,
+            descend: false, remove_with: Some("newtool remove {name}".into()),
+        };
+        let filled = r.remove_with.as_ref().map(|t| t.replace("{name}", "llama-3-8b"));
+        assert_eq!(filled.as_deref(), Some("newtool remove llama-3-8b"));
+        assert!(runnable(filled.as_deref().unwrap()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
