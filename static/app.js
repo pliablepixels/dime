@@ -1047,6 +1047,7 @@ const typing = () => { const a = document.activeElement; return a?.tagName === '
 addEventListener('keydown', (e) => { if (e.key === ' ' && mode === 'disk' && scanning && !typing()) { e.preventDefault(); rotHold = !rotHold; toast(rotHold ? 'Di: holding the camera · space to resume' : 'Di: circling again', 'du'); return; }
   if (e.key === ' ' && mode === 'mem' && memView === 'orbit' && !typing()) { e.preventDefault(); orbit.frozen = !orbit.frozen; toast(orbit.frozen ? 'Me: holding still · space to resume' : 'Me: live again', 'me'); $('#pause').setAttribute('aria-pressed', String(orbit.frozen)); $('#pause').textContent = orbit.frozen ? 'Paused' : 'Pause'; return; }
   if (e.key === '/' && mode === 'mem' && !typing()) { e.preventDefault(); $('#memq').focus(); return; }
+  if (e.key === '/' && mode === 'disk' && current && !typing()) { e.preventDefault(); showTab('find'); return; }
   if (e.key === 'Escape' && document.activeElement === $('#memq')) { $('#memq').value = ''; memFilter.q = ''; refilter(); $('#memq').blur(); return; }
   if (e.key === 'm' && mode === 'disk' && hog.returnTo && !typing()) { const to = hog.returnTo; hog.returnTo = null; hog.pendingSel = to.pid; enterHog(); return; }
   if (dlg.open || gearEl.open || resetEl.open) return;
@@ -1211,7 +1212,36 @@ const nodeInfo = (n) => `${fmt(n.size)}${n.full_size != null && n.full_size !== 
 const filterLabel = () => ({ safe: 'safe to remove', likely: 'probably safe', review: 'worth a look', flagged: 'flagged' })[filter] ?? '';
 function renderSidebar() { $('#back').hidden = !navHist.length; renderFocus(); renderCleanup(); }
 $('#back').onclick = goBack;
-function showTab(v) { for (const t of $('#tabs').children) t.setAttribute('aria-selected', String(t.dataset.v === v)); $('#v-clean').hidden = v !== 'clean'; $('#v-browse').hidden = v !== 'browse'; }
+function showTab(v) {
+  for (const t of $('#tabs').children) t.setAttribute('aria-selected', String(t.dataset.v === v));
+  $('#v-clean').hidden = v !== 'clean'; $('#v-browse').hidden = v !== 'browse'; $('#v-find').hidden = v !== 'find';
+  if (v === 'find') $('#findq').focus();
+}
+// ---- find: a name search over the tree Di already holds, so it answers instantly
+async function runFind() {
+  const q = $('#findq').value.trim(), out = $('#findout');
+  if (!q) { out.innerHTML = ''; return; }
+  const here = $('#findhere').checked ? (current?.path ?? '') : '';
+  let hits;
+  try { hits = await api(`/api/find?q=${encodeURIComponent(q)}&path=${encodeURIComponent(here)}`); }
+  catch (e) { out.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!hits.length) { out.innerHTML = `<div class="empty">Nothing named like that${here ? ' in this folder' : ''}.</div>`; return; }
+  out.innerHTML = '';
+  for (const h of hits) {
+    const el = document.createElement('div'); el.className = 'hit'; el.tabIndex = 0;
+    el.innerHTML = `<div class="n"></div><div class="s"></div><div class="p"></div>`;
+    const n = el.querySelector('.n'); n.textContent = h.path.split('/').pop(); n.classList.toggle('dir', h.is_dir);
+    el.querySelector('.s').textContent = fmt(h.size);
+    el.querySelector('.p').textContent = parentOf(h.path) || rootName;
+    const go = () => navigate(h.is_dir ? h.path : parentOf(h.path), { highlight: h.path });
+    el.onclick = go; el.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+    out.appendChild(el);
+  }
+}
+$('#findform').onsubmit = (e) => { e.preventDefault(); runFind(); };
+let findTimer = null;
+$('#findq').oninput = () => { clearTimeout(findTimer); findTimer = setTimeout(runFind, 220); };
+$('#findhere').onchange = runFind;
 $('#tabs').onclick = (e) => { const b = e.target.closest('button[data-v]'); if (b) showTab(b.dataset.v); };
 // drag the panel's left edge to widen it; the map chrome follows via --pw
 { const setW = (w) => document.documentElement.style.setProperty('--pw', `${w}px`);

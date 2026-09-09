@@ -249,6 +249,19 @@
   #focus .up { width: 26px; height: 26px; margin-right: 6px; border-radius: 7px; border: 1px solid var(--line); background: rgba(232,230,223,.06); color: var(--ink); font-size: 14px; font-weight: 700; }
   #focus .up:hover:not(:disabled) { background: rgba(232,230,223,.14); }
   #focus .up:disabled { opacity: .3; }
+  #findform { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 10px; border-bottom: 1px solid var(--line); }
+  #findq { background: rgba(232,230,223,.05); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; font-size: 13px; color: var(--ink); }
+  #findq:focus { outline: 0; border-color: var(--du); }
+  #findform .here { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2); }
+  #findform .here input { accent-color: var(--du); margin: 0; }
+  #findout { overflow: auto; }
+  #findout .empty { padding: 14px 16px; color: var(--ink-3); font-size: 13px; }
+  #findout .hit { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 16px; cursor: pointer; border-bottom: 1px solid rgba(232,230,223,.04); }
+  #findout .hit:hover, #findout .hit:focus-visible { background: rgba(232,230,223,.06); outline: 0; }
+  #findout .hit .n { grid-area: 1 / 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #findout .hit .n.dir::after { content: ' /'; color: var(--ink-3); font-weight: 400; }
+  #findout .hit .p { grid-area: 2 / 1; color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #findout .hit .s { grid-area: 1 / 2 / span 2 / 3; align-self: center; font-weight: 600; font-size: 13px; }
   #focus .crumb { background: none; border: 0; padding: 2px 3px; border-radius: 4px; color: var(--ink-2); font-size: 12px; font-weight: 600; }
   #focus .crumb:hover { color: var(--ink); background: rgba(232,230,223,.08); }
   #focus .name { font-size: 22px; font-weight: 800; letter-spacing: -.01em; word-break: break-word; line-height: 1.15; margin: 6px 16px 2px; }
@@ -690,6 +703,7 @@
         <button id="back" type="button" hidden title="Back to the folder you came from">‹ Back</button>
         <button role="tab" aria-selected="true" data-v="clean">Cleanup</button>
         <button role="tab" aria-selected="false" data-v="browse">Browse</button>
+        <button role="tab" aria-selected="false" data-v="find">Find</button>
       </div>
       <div class="view" id="v-clean">
         <div id="clean-head"></div>
@@ -699,6 +713,10 @@
       </div>
       <div class="view" id="v-browse" hidden>
         <div id="focus"></div>
+      </div>
+      <div class="view" id="v-find" hidden>
+        <form id="findform"><input id="findq" type="search" placeholder="Find a folder or file by name…" aria-label="Find by name" spellcheck="false"><label class="here"><input type="checkbox" id="findhere"> only in this folder</label></form>
+        <div id="findout"></div>
       </div>
     </aside>
   </div>
