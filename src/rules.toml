@@ -6,7 +6,9 @@
 #
 # Every field except id/tier/what/note is a matcher; all given matchers must hold.
 #   id                 groups items in the Cleanup panel (same id on two rules = one group)
-#   tier               safe | likely | review
+#   tier               safe | likely | review | note
+#                      the first three are recommendations. "note" is not: it is shown as inventory,
+#                      kept out of the headline totals, and never suggested for removal
 #   what               heading shown in the panel
 #   note               one line under each item; {idle} = "Idle 4 months.", {age} = "4 months"
 #   weight             score multiplier, bigger floats to the top (default 1.0)
@@ -18,12 +20,31 @@
 #                      one OS version or one simulator instead of the whole tree that holds them
 #   under              some ancestor folder has this name, e.g. "Downloads"
 #   has_child          the folder directly contains one of these names
+#   has_sibling        one of these names sits beside it, in the same folder
+#   no_sibling         none of these names sits beside it. With has_sibling this separates a cache
+#                      a command will rebuild from an orphan whose project is gone
 #   min_size           "20 MB", "1 GB" or bytes; items under 1 MB are never listed
 #   min_age_days       untouched (no read or write) for at least this many days
 #
 # disable = ["downloads", "stale"]   # in your file: switch built-in ids off
 
+# Anything a running program holds open drops to this tier, whatever its rule decided: a cache
+# being written to right now is not safe to move. Set to "" to switch the check off.
+open_tier = "review"
+
 # ---- folders ----
+
+# A cache with its project still beside it is rebuilt by one command. The same folder with the
+# project gone is an orphan: nothing will ever rebuild it, and nothing still needs it.
+[[rule]]
+id = "orphan-cache"
+tier = "safe"
+what = "Caches whose project is gone"
+note = "Nothing beside it builds this any more. Nothing will rebuild it either. {idle}"
+weight = 3.2
+dir = true
+name = ["node_modules", "target", ".venv", "venv", "Pods", ".next", ".turbo", ".nuxt", ".dart_tool", ".angular", "bower_components"]
+no_sibling = ["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "Podfile", "pubspec.yaml", "angular.json", "go.mod", "Gemfile", "setup.py"]
 
 [[rule]]
 id = "cache"
@@ -213,28 +234,22 @@ dir = false
 ext = ["log", "crash"]
 min_size = "10 MB"
 
+# The two below are inventory, not advice: "you own a big file" is not a reason to remove it. They
+# sit in the note tier so they stay out of the headline, and their floors are high enough that the
+# list stays readable rather than running to hundreds of rows.
 [[rule]]
 id = "large"
-tier = "review"
-what = "Large files"
-note = "{idle}"
+tier = "note"
+what = "Largest files"
+note = "Not a suggestion, just the biggest things here. {idle}"
 dir = false
-min_size = "100 MB"
-min_age_days = 181
-
-[[rule]]
-id = "large"
-tier = "review"
-what = "Large files"
-note = "Used recently. Worth knowing it is here."
-dir = false
-min_size = "100 MB"
+min_size = "1 GB"
 
 [[rule]]
 id = "stale"
-tier = "review"
-what = "Big and idle"
-note = "{idle}"
+tier = "note"
+what = "Big and long untouched"
+note = "Not a suggestion. Nothing has read or written it in {age}."
 dir = false
-min_size = "10 MB"
-min_age_days = 181
+min_size = "200 MB"
+min_age_days = 365

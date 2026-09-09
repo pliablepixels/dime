@@ -4,7 +4,9 @@ use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
 
 pub const BUILTIN: &str = include_str!("rules.toml");
-pub const TIERS: &[&str] = &["safe", "likely", "review"];
+/// safe/likely/review are recommendations. `note` is not: it is inventory DiMe shows without
+/// suggesting anything, and it stays out of the headline totals.
+pub const TIERS: &[&str] = &["safe", "likely", "review", "note"];
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +26,13 @@ pub struct Rule {
     pub under: Option<String>,
     #[serde(default)]
     pub has_child: Vec<String>,
+    /// Names that must sit *beside* the item, in the same folder. A node_modules next to a
+    /// package.json will be rebuilt by a command; one with no package.json is an orphan.
+    #[serde(default)]
+    pub has_sibling: Vec<String>,
+    /// Names that must NOT sit beside it, the other half of the same question.
+    #[serde(default)]
+    pub no_sibling: Vec<String>,
     #[serde(default, deserialize_with = "size")]
     pub min_size: u64,
     #[serde(default)]
@@ -38,8 +47,19 @@ fn one() -> f64 {
 struct File {
     #[serde(default)]
     disable: Vec<String>,
+    /// Anything a running process holds open drops to this tier whatever its rule decided, because
+    /// live files are not safe to move. Empty string switches the check off.
+    open_tier: Option<String>,
     #[serde(default, rename = "rule")]
     rules: Vec<Rule>,
+}
+
+/// The rule set plus the settings that apply across all of it.
+#[derive(Debug)]
+pub struct Rules {
+    pub rules: Vec<Rule>,
+    /// None when the user switched the open-file check off.
+    pub open_tier: Option<String>,
 }
 
 /// "20 MB", "1.5 GB", "512" (bytes)
@@ -81,6 +101,8 @@ pub struct Item<'a> {
     /// path of the folder holding it, relative to the scan root ("" at the top)
     pub parent: &'a str,
     pub children: &'a [String],
+    /// what else sits in the same folder
+    pub siblings: &'a [String],
 }
 
 impl Rule {
@@ -91,6 +113,8 @@ impl Rule {
             && self.parent_ends_with.as_deref().is_none_or(|p| it.parent.ends_with(p))
             && self.under.as_deref().is_none_or(|u| it.parent.split('/').any(|s| s == u))
             && (self.has_child.is_empty() || it.children.iter().any(|c| self.has_child.contains(c)))
+            && (self.has_sibling.is_empty() || it.siblings.iter().any(|c| self.has_sibling.contains(c)))
+            && !it.siblings.iter().any(|c| self.no_sibling.contains(c))
             && it.size >= self.min_size
             && (self.min_age_days == 0 || (it.age_known && it.age_days >= self.min_age_days))
     }
@@ -111,16 +135,22 @@ fn parse(text: &str) -> Result<File, String> {
 }
 
 /// User rules first, then the built-ins minus the disabled ids.
-pub fn merge(user: &str) -> Result<Vec<Rule>, String> {
+pub fn merge(user: &str) -> Result<Rules, String> {
     let builtin = parse(BUILTIN).expect("built-in rules.toml is valid");
     let u = parse(user)?;
-    let mut out = u.rules;
-    out.extend(builtin.rules.into_iter().filter(|r| !u.disable.contains(&r.id)));
-    Ok(out)
+    let open_tier = u.open_tier.or(builtin.open_tier).filter(|t| !t.is_empty());
+    if let Some(t) = &open_tier {
+        if !TIERS.contains(&t.as_str()) {
+            return Err(format!("open_tier must be one of {}, or \"\" to switch it off", TIERS.join(", ")));
+        }
+    }
+    let mut rules = u.rules;
+    rules.extend(builtin.rules.into_iter().filter(|r| !u.disable.contains(&r.id)));
+    Ok(Rules { rules, open_tier })
 }
 
 /// The active rule set. A broken user file is reported once per load and ignored.
-pub fn load() -> Vec<Rule> {
+pub fn load() -> Rules {
     let user = std::fs::read_to_string(user_file()).unwrap_or_default();
     merge(&user).unwrap_or_else(|e| {
         eprintln!("DiMe: ignoring {}: {e}", user_file().display());
@@ -133,15 +163,15 @@ mod tests {
     use super::*;
 
     fn item<'a>(name: &'a str, is_dir: bool, size: u64, age: i64, parent: &'a str) -> Item<'a> {
-        Item { name, is_dir, ext: name.rsplit('.').next().unwrap_or(""), size, age_days: age, age_known: true, parent, children: &[] }
+        Item { name, is_dir, ext: name.rsplit('.').next().unwrap_or(""), size, age_days: age, age_known: true, parent, children: &[], siblings: &[] }
     }
 
     #[test]
     fn builtin_and_user_rules() {
-        let b = merge("").unwrap();
-        assert_eq!(b[0].id, "cache");
+        let b = merge("").unwrap().rules;
+        assert_eq!(b[0].id, "orphan-cache"); // the more specific cache rule is tried first
         assert!(b.iter().any(|r| r.id == "downloads"));
-        let nm = item("node_modules", true, 5 << 20, 0, "proj");
+        let nm = Item { siblings: &["package.json".into()], ..item("node_modules", true, 5 << 20, 0, "proj") };
         assert_eq!(b.iter().find(|r| r.matches(&nm)).unwrap().id, "cache");
         let dl = item("x.bin", false, 5 << 20, 40, "Downloads/sub");
         assert_eq!(b.iter().find(|r| r.matches(&dl)).unwrap().id, "downloads");
@@ -159,7 +189,7 @@ dir = true
 name = ["node_modules"]
 min_size = "1 MB"
 "#;
-        let m = merge(user).unwrap();
+        let m = merge(user).unwrap().rules;
         assert_eq!(m[0].id, "docker");
         assert_eq!(m.iter().find(|r| r.matches(&nm)).unwrap().id, "docker"); // user rule wins over the built-in
         assert!(m.iter().all(|r| r.id != "downloads"));
@@ -188,6 +218,19 @@ min_size = "1 MB"
         assert!(b.iter().find(|r| r.matches(&undated)).is_none_or(|r| r.min_age_days == 0));
         let dated = item("thing.dmg", false, 8 << 30, 20_000, "Library/Developer/CoreDevice");
         assert_eq!(b.iter().find(|r| r.matches(&dated)).unwrap().id, "installer");
+
+        // a cache beside its project is rebuilt by a command; the same folder orphaned is dead weight
+        let live = Item { siblings: &["package.json".into()], ..item("node_modules", true, 5 << 20, 400, "proj") };
+        assert_eq!(b.iter().find(|r| r.matches(&live)).unwrap().id, "cache");
+        let orphan = Item { siblings: &["README.md".into()], ..item("node_modules", true, 5 << 20, 400, "proj") };
+        assert_eq!(b.iter().find(|r| r.matches(&orphan)).unwrap().id, "orphan-cache");
+
+        // inventory stays out of the recommendation tiers
+        let big = item("movie.mov", false, 3 << 30, 10, "Movies");
+        assert_eq!(b.iter().find(|r| r.matches(&big)).unwrap().tier, "note");
+        assert!(merge("").unwrap().open_tier.as_deref() == Some("review"));
+        assert!(merge("open_tier = \"\"").unwrap().open_tier.is_none());
+        assert!(merge("open_tier = \"nope\"").unwrap_err().contains("open_tier"));
 
         assert_eq!(parse_size("20 MB"), Some(20 << 20));
         assert_eq!(parse_size("1.5gb"), Some(3 << 29));

@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MB: u64 = 1 << 20;
@@ -40,6 +41,9 @@ pub struct Summary {
 struct Walk {
     now: i64,
     rules: Vec<Rule>,
+    /// Tier that anything currently open drops to, and the open paths themselves.
+    open_tier: Option<String>,
+    open: Vec<String>,
     /// Absolute path of the scan root, so a candidate can be checked against the real filesystem.
     base: PathBuf,
     /// Whether each folder walked can be written to, cached because siblings share one.
@@ -49,6 +53,10 @@ struct Walk {
     seen: HashMap<(u64, String), (String, i64)>,
 }
 
+/// How cautious a tier is: only ever moved further down the list, never up.
+fn rank(tier: &str) -> usize {
+    rules::TIERS.iter().position(|t| *t == tier).unwrap_or(0)
+}
 fn ext(name: &str) -> String {
     name.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
 }
@@ -58,6 +66,39 @@ fn months(days: i64) -> String {
 
 /// All candidates in the tree, best first. Compute once per tree version; filter by prefix per request.
 /// Rules are re-read each time, so edits to ~/.dime/rules.toml show up on the next rescan.
+/// Every regular file a running process has open, as absolute paths. One lsof sweep for the whole
+/// machine, cached briefly because find_all runs again on every tree change.
+fn open_paths() -> Vec<String> {
+    static CACHE: Mutex<Option<(SystemTime, Arc<Vec<String>>)>> = Mutex::new(None);
+    let mut c = CACHE.lock().unwrap();
+    if let Some((at, v)) = c.as_ref() {
+        if at.elapsed().is_ok_and(|e| e.as_secs() < 15) {
+            return v.as_ref().clone();
+        }
+    }
+    let mut out = vec![];
+    if let Ok(o) = std::process::Command::new("lsof").args(["-Fn", "-w"]).output() {
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some(p) = line.strip_prefix('n') {
+                if p.starts_with('/') && !p.starts_with("/System/") && !p.starts_with("/usr/") && !p.starts_with("/dev/") {
+                    out.push(p.to_string());
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    *c = Some((SystemTime::now(), Arc::new(out.clone())));
+    out
+}
+
+/// Is anything open underneath this path right now?
+fn in_use(w: &Walk, abs: &Path) -> bool {
+    let p = abs.to_string_lossy();
+    let i = w.open.partition_point(|o| o.as_str() < p.as_ref());
+    w.open[i..].first().is_some_and(|o| o.as_str() == p || o.starts_with(&format!("{p}/")))
+}
+
 /// Removing something means writing to the folder that holds it, so that is what decides whether
 /// DiMe may offer it. Without this it lists root-owned system assets it could never remove.
 fn removable(w: &mut Walk, dir: &str) -> bool {
@@ -74,7 +115,10 @@ fn removable(w: &mut Walk, dir: &str) -> bool {
 
 pub fn find_all(base: &Path, root: &Node) -> Vec<Candidate> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let mut w = Walk { now, rules: rules::load(), base: base.to_path_buf(), writable: HashMap::new(), out: vec![], seen: HashMap::new() };
+    let cfg = rules::load();
+    // Me's half of the app answers a question Di cannot: what is in use right this second.
+    let open = if cfg.open_tier.is_some() { open_paths() } else { vec![] };
+    let mut w = Walk { now, rules: cfg.rules, open_tier: cfg.open_tier, open, base: base.to_path_buf(), writable: HashMap::new(), out: vec![], seen: HashMap::new() };
     walk(&mut w, root, "");
     w.out.sort_by(|a, b| b.score.total_cmp(&a.score));
     w.out
@@ -87,23 +131,26 @@ pub fn under<'a>(all: &'a [Candidate], prefix: &str) -> impl Iterator<Item = &'a
 
 pub fn summary<'a>(cands: impl Iterator<Item = &'a Candidate>) -> Summary {
     let mut tiers: Vec<(&'static str, u64, usize)> = rules::TIERS.iter().map(|t| (*t, 0, 0)).collect();
-    let mut kinds: HashMap<&str, (&str, &str, u64, usize)> = HashMap::new();
+    // keyed by kind *and* tier: one open file can demote a single item out of an otherwise safe
+    // group, and reporting the group under that one item's tier misrepresents the other hundred
+    let mut kinds: HashMap<(&str, &str), (&str, u64, usize)> = HashMap::new();
     let mut total = 0;
     for c in cands {
         total += c.size;
         let t = tiers.iter_mut().find(|t| t.0 == c.tier).unwrap();
         t.1 += c.size;
         t.2 += 1;
-        let k = kinds.entry(&c.reason).or_insert((&c.tier, &c.what, 0, 0));
-        k.2 += c.size;
-        k.3 += 1;
+        let k = kinds.entry((&c.reason, &c.tier)).or_insert((&c.what, 0, 0));
+        k.1 += c.size;
+        k.2 += 1;
     }
-    let mut kinds: Vec<_> = kinds.into_iter().map(|(id, (tier, what, size, n))| (id.into(), tier.into(), what.into(), size, n)).collect();
+    let mut kinds: Vec<_> = kinds.into_iter().map(|((id, tier), (what, size, n))| (id.into(), tier.into(), what.into(), size, n)).collect();
     kinds.sort_by(|a, b| b.3.cmp(&a.3));
     Summary { total, tiers, kinds }
 }
 
 fn walk(w: &mut Walk, n: &Node, path: &str) {
+    let sibs: Vec<String> = n.children.iter().map(|k| k.name.clone()).collect();
     for c in &n.children {
         if c.size < MB {
             continue;
@@ -130,7 +177,7 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             let key = (c.size, c.name.clone());
             if let Some((other, other_m)) = w.seen.get(&key).cloned() {
                 if other_m >= c.mtime {
-                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], min_size: 0, min_age_days: 0 };
+                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0 };
                     w.out.push(mk(&dup, format!("Same name and size as {other}.")));
                     continue;
                 }
@@ -139,14 +186,23 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
         }
         let e = ext(&c.name);
         let kids: Vec<String> = if c.is_dir { c.children.iter().map(|k| k.name.clone()).collect() } else { vec![] };
-        let it = Item { name: &c.name, is_dir: c.is_dir, ext: &e, size: c.size, age_days: age, age_known, parent: path, children: &kids };
+        let it = Item { name: &c.name, is_dir: c.is_dir, ext: &e, size: c.size, age_days: age, age_known, parent: path, children: &kids, siblings: &sibs };
         // checked before the rule lookup so the two borrows of `w` never overlap; an item we cannot
         // remove still gets walked into, since something deeper may sit in a folder we do own
         let can_remove = removable(w, path);
         if let Some(r) = w.rules.iter().filter(|_| can_remove).find(|r| r.matches(&it)) {
             let idle = if age_known { format!("Idle {}.", months(age)) } else { "Age unknown.".into() };
             let note = r.note.replace("{idle}", &idle).replace("{age}", &if age_known { months(age) } else { "an unknown time".into() });
-            w.out.push(mk(r, note));
+            let mut cand = mk(r, note);
+            // Me knows what Di cannot: something being written to right now is not safe to move,
+            // whatever its name suggests. This is the one check that uses live evidence.
+            if let Some(t) = w.open_tier.clone() {
+                if rank(&t) > rank(&cand.tier) && in_use(w, &w.base.join(&p)) {
+                    cand.tier = t;
+                    cand.note = format!("A running program has this open right now. {}", cand.note);
+                }
+            }
+            w.out.push(cand);
         } else if c.is_dir {
             walk(w, c, &p);
         }
@@ -166,10 +222,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("Downloads")).unwrap();
         std::fs::write(nm.join("big.js"), vec![0u8; 2 << 20]).unwrap();
         std::fs::write(dir.join("proj/small.txt"), b"hi").unwrap();
+        std::fs::write(dir.join("proj/package.json"), b"{}").unwrap(); // project still present, so its cache is rebuildable
         std::fs::write(dir.join("Downloads/tool.dmg"), vec![1u8; 6 << 20]).unwrap();
         std::fs::write(dir.join("proj/copy.dmg"), vec![1u8; 6 << 20]).unwrap();
         let mut tree = scan::scan(&dir, &scan::Progress::new(&dir));
-        assert_eq!(tree.files, 4);
+        assert_eq!(tree.files, 5);
         let all = find_all(&dir, &tree);
         let by = |r: &str| all.iter().find(|c| c.reason == r).map(|c| c.path.clone());
         assert_eq!(by("cache"), Some("proj/node_modules".into()));
@@ -188,10 +245,10 @@ mod tests {
         // live patch: a new file appears, an existing one is deleted, a folder is removed
         std::fs::write(dir.join("proj/new.bin"), vec![0u8; 3 << 20]).unwrap();
         scan::patch(&mut tree, &dir, &dir.join("proj/new.bin"));
-        assert_eq!(tree.files, 5);
+        assert_eq!(tree.files, 6);
         std::fs::remove_file(dir.join("proj/small.txt")).unwrap();
         scan::patch(&mut tree, &dir, &dir.join("proj/small.txt"));
-        assert_eq!(tree.files, 4);
+        assert_eq!(tree.files, 5);
         std::fs::remove_dir_all(dir.join("proj/node_modules")).unwrap();
         scan::patch(&mut tree, &dir, &dir.join("proj/node_modules"));
         assert!(scan::get(&tree, "proj/node_modules").is_none());
