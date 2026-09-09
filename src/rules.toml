@@ -81,7 +81,7 @@ name = ["huggingface", "lm-studio", "lmstudio", "torch", "uv", "pip", "hub", "mo
 id = "ollama-model"
 tier = "review"
 what = "Ollama models"
-note = "Pulled again on demand. {idle}"
+note = "Pulled again on demand, unless you built it yourself with `ollama create`, in which case nothing will. {idle}"
 weight = 1.4
 dir = false
 parent_ends_with = ".ollama/models/blobs"
@@ -159,7 +159,7 @@ min_size = "200 MB"
 id = "diffusion-model"
 tier = "review"
 what = "Image model checkpoints"
-note = "A checkpoint, LoRA or VAE for an image model. Big, and re-downloadable from where it came. {idle}"
+note = "A downloaded checkpoint is fetched again; one your own training produced is not, and this cannot tell them apart. {idle}"
 weight = 1.3
 dir = false
 ext = ["safetensors", "ckpt", "pt", "pth", "gguf"]
@@ -175,6 +175,30 @@ dir = false
 ext = ["gguf"]
 min_size = "200 MB"
 
+# Before every cache rule: an embedding store is a database that happens to live in a cache folder.
+# Rebuilding it means paying for the embeddings again, and if the documents it was built from have
+# moved on, it cannot be rebuilt at all. Never a suggestion.
+[[rule]]
+id = "vector-store"
+tier = "note"
+what = "Vector stores"
+note = "Embeddings, not a cache. Rebuilding means embedding every document again, and only if you still have them. {idle}"
+weight = 1.0
+dir = true
+name = ["chroma", "chroma_db", ".chroma", "chromadb", "lancedb", ".lancedb", "qdrant_storage", "milvus", "weaviate", "faiss_index", "vectorstore", "vector_store", "pgdata"]
+min_size = "20 MB"
+
+# What a training or fine-tuning run produced. Nothing on the internet has a copy.
+[[rule]]
+id = "run-output"
+tier = "note"
+what = "Training runs & checkpoints"
+note = "Output of a run on this machine, not something downloaded: no re-download will bring it back. {idle}"
+weight = 1.0
+dir = true
+name = ["checkpoints", "checkpoint", "ckpt", "runs", "wandb", "mlruns", "lora", "loras", "adapters", "finetune", "fine_tune", "outputs"]
+min_size = "50 MB"
+
 [[rule]]
 id = "torch-cache"
 tier = "likely"
@@ -182,30 +206,53 @@ what = "Model caches"
 note = "Weights and checkpoints a library downloaded for itself. Fetched again on demand. {idle}"
 weight = 1.5
 dir = true
-name = ["torch", "whisper", "mlx", "sentence_transformers", "transformers", "timm", "open_clip", "llama_index", "chroma", "onnx"]
+name = ["torch", "whisper", "mlx", "sentence_transformers", "transformers", "timm", "open_clip", "llama_index", "onnx"]
 under = ".cache"
 min_size = "100 MB"
 
 [[rule]]
 id = "agent-sessions"
-tier = "likely"
-what = "Agent transcripts & logs"
-note = "What a coding agent recorded of past sessions. Deleting loses the history, nothing else. {idle}"
-weight = 1.6
+tier = "note"
+what = "Agent transcripts & memory"
+note = "Everything a coding agent remembers: past sessions, and what resuming one reads back. Nothing regenerates it. {idle}"
+weight = 1.0
 dir = true
-name = ["projects", "sessions", "file-history", "shell-snapshots", "logs", "history", "cache", "todos"]
+name = ["projects", "sessions", "file-history", "history", "todos"]
 under = ".codex"
 min_size = "20 MB"
 
 [[rule]]
 id = "agent-sessions"
-tier = "likely"
-what = "Agent transcripts & logs"
-note = "What a coding agent recorded of past sessions. Deleting loses the history, nothing else. {idle}"
-weight = 1.6
+tier = "note"
+what = "Agent transcripts & memory"
+note = "Everything a coding agent remembers: past sessions, and what resuming one reads back. Nothing regenerates it. {idle}"
+weight = 1.0
 dir = true
-name = ["projects", "sessions", "file-history", "shell-snapshots", "logs", "history", "todos", "statsig"]
+name = ["projects", "sessions", "file-history", "history", "todos"]
 under = ".claude"
+min_size = "20 MB"
+
+# The disposable half of the same folders: caches and snapshots an agent rebuilds by itself.
+[[rule]]
+id = "agent-scratch"
+tier = "likely"
+what = "Agent caches & snapshots"
+note = "Working files a coding agent rebuilds on its own. No conversation lives here. {idle}"
+weight = 1.5
+dir = true
+name = ["shell-snapshots", "statsig", "cache", "logs"]
+under = ".claude"
+min_size = "20 MB"
+
+[[rule]]
+id = "agent-scratch"
+tier = "likely"
+what = "Agent caches & snapshots"
+note = "Working files a coding agent rebuilds on its own. No conversation lives here. {idle}"
+weight = 1.5
+dir = true
+name = ["shell-snapshots", "statsig", "cache", "logs"]
+under = ".codex"
 min_size = "20 MB"
 
 [[rule]]

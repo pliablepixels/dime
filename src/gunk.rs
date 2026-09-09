@@ -296,7 +296,7 @@ fn name_ollama(base: &Path, out: &mut Vec<Candidate>, served: Option<PathBuf>) {
             c.remove_cmd = ours.then(|| c.remove_cmd.as_ref().map(|t| t.replace("{name}", model))).flatten();
             c.name = model.clone();
             let how = if *ours {
-                format!("Deleting this hands it to Ollama as `ollama rm {model}`, so its own list stays right.")
+                format!("Deleting this hands it to Ollama as `ollama rm {model}`, so its own list stays right. That is final: a pulled model downloads again, one you built with `ollama create` does not.")
             } else {
                 "This store is not the one the ollama command talks to, so it is removed as plain files.".into()
             };

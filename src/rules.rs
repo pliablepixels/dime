@@ -248,4 +248,43 @@ min_size = "1 MB"
         assert_eq!(parse_size("512"), Some(512));
         assert_eq!(parse_size("2 lightyears"), None);
     }
+
+    /// Things a machine used for AI work holds that no download brings back. None of them may ever
+    /// be presented as safe or probably safe, whatever else changes in the rule file.
+    #[test]
+    fn nothing_irreplaceable_is_ever_suggested() {
+        let b = merge("").unwrap().rules;
+        let hit = |it: &Item| b.iter().find(|r| r.matches(it)).unwrap_or_else(|| panic!("nothing matched {}", it.name));
+        let cases = [
+            // a coding agent's own memory: past sessions, and what resuming one reads back
+            ("agent-sessions", item("projects", true, 3 << 30, 40, "Users/x/.claude")),
+            ("agent-sessions", item("sessions", true, 3 << 30, 40, "Users/x/.codex")),
+            ("agent-sessions", item("todos", true, 100 << 20, 40, "Users/x/.claude")),
+            // embeddings: rebuilt only if you still have every document, and only by paying again
+            ("vector-store", item("chroma", true, 200 << 20, 90, "Users/x/.cache")),
+            ("vector-store", item("lancedb", true, 200 << 20, 90, "Users/x/proj/data")),
+            ("vector-store", item("vector_store", true, 50 << 20, 400, "Users/x/proj")),
+            // what a training run produced on this machine
+            ("run-output", item("checkpoints", true, 8 << 30, 200, "Users/x/proj")),
+            ("run-output", item("lora", true, 2 << 30, 200, "Users/x/proj/train")),
+            ("run-output", item("wandb", true, 500 << 20, 200, "Users/x/proj")),
+        ];
+        for (id, it) in &cases {
+            let r = hit(it);
+            assert_eq!(r.id, *id, "{} matched {} instead", it.name, r.id);
+            assert_eq!(r.tier, "note", "{} is irreplaceable and must stay out of the recommendations", it.name);
+        }
+
+        // the disposable half of the same folders is still worth offering
+        let scratch = item("shell-snapshots", true, 100 << 20, 40, "Users/x/.claude");
+        assert_eq!(hit(&scratch).id, "agent-scratch");
+        assert_eq!(hit(&scratch).tier, "likely");
+
+        // and a model store is a recommendation, never a silent one: it says what removal costs
+        let blob = Item { ..item("sha256-abc", false, 5 << 30, 40, "Users/x/.ollama/models/blobs") };
+        let r = hit(&blob);
+        assert_eq!(r.id, "ollama-model");
+        assert_eq!(r.remove_with.as_deref(), Some("ollama rm {name}"), "Ollama removes its own models");
+        assert!(r.note.contains("ollama create"), "says when nothing will bring it back");
+    }
 }
