@@ -570,8 +570,10 @@ const guru = { g: null, x: 40, z: 40, y: 40, vx: 0, vz: 0, key: null, want: fals
 const RU_TILT = 32 * Math.PI / 180; // the ±32° of the two orbit paths on the landing button
 // The landing button draws Ru as a stroked line figure in a 40x48 box: a head, the arc of the
 // shoulders, the sweep of the robe, a ground line, and a four-pointed spark above. These are those
-// exact paths, traced as tubes so they keep the stroke weight, and the whole thing turns to face the
-// camera so it reads as the logo from any angle while still sitting in the scene's perspective.
+// exact paths, traced as tubes so they keep the stroke weight. The figure turns to face the camera
+// so it reads as the logo from any angle; the two orbits do not. They are real inclined circles in
+// world space, so as the camera comes round they open and close and their beads pass behind Ru,
+// which is what puts the character in the same perspective as the map instead of on top of it.
 const RU_S = 0.17, RU_W = RU_S * 0.95; // SVG units to world units; the logo strokes at width 2, so the tube radius is ~1 SVG unit
 const ruPt = (x, y) => new THREE.Vector3((x - 20) * RU_S, (30 - y) * RU_S, 0);
 const cubic = (p0, c1, c2, p3, n = 14) => Array.from({ length: n + 1 }, (_, i) => {
@@ -585,9 +587,10 @@ function ruStroke(pts, mat, r = RU_W, closed = false) {
   return new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(16, pts.length * 3), r, 6, closed), mat);
 }
 function makeSage() {
-  const g = new THREE.Group();
+  const g = new THREE.Group();                    // stays square to the world: the orbits live here
+  const card = new THREE.Group(); g.add(card);    // turns to the camera: the logo's own line work
   const ink = new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 1, fog: false, toneMapped: false }); // no fog, so the line work stays as crisp as the logo it copies
-  const parts = new THREE.Group(); g.add(parts);
+  const parts = new THREE.Group(); card.add(parts);
 
   // circle cx=20 cy=13 r=5.5
   parts.add(ruStroke(Array.from({ length: 28 }, (_, i) => { const a = (i / 28) * Math.PI * 2; return ruPt(20 + Math.cos(a) * 5.5, 13 + Math.sin(a) * 5.5); }), ink, RU_W, true));
@@ -601,20 +604,23 @@ function makeSage() {
   parts.add(ruStroke([ruPt(20, 32), ruPt(20, 36)], ink));  // M20 32 v4
   // the four-pointed spark above the head
   const spark = ruStroke([ruPt(20, 1.5), ruPt(21.2, 4.3), ruPt(24, 5.5), ruPt(21.2, 6.7), ruPt(20, 9.5), ruPt(18.8, 6.7), ruPt(16, 5.5), ruPt(18.8, 4.3)], ink, RU_W, true);
-  g.add(spark);
+  card.add(spark);
   const core = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 10), new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.035, blending: THREE.AdditiveBlending, depthWrite: false }));
-  core.position.set(0, ruPt(20, 24).y, -1.4); g.add(core); // behind the line work, the way the logo's glow sits behind it
-  const light = new THREE.PointLight('#C9B3FF', 40, 90, 2); light.position.y = 0.4; g.add(light);
+  core.position.set(0, ruPt(20, 24).y, -1.4); card.add(core); // behind the line work, the way the logo's glow sits behind it
+  const light = new THREE.PointLight('#C9B3FF', 40, 90, 2); light.position.y = 0.4; card.add(light);
 
-  // the two orbit paths, rx 44 ry 16 at the logo's own tilts, with a bead running each
+  // The logo draws the two orbits as 44 by 16 ellipses at ±32°. A circle of that radius, laid flat
+  // and tilted by the same angle, projects to very nearly that ellipse from the map's usual camera
+  // height, and unlike a drawn ellipse it keeps changing as the camera moves.
+  const orbits = new THREE.Group(); g.add(orbits);
   const rings = [];
-  for (const [tilt, period, phase] of [[-RU_TILT, 7, 0], [RU_TILT, 9.5, 4]]) {
-    const rg = new THREE.Group(); rg.rotation.z = tilt; g.add(rg);
-    const RX = 44 * RU_S * 0.72, RY = RX * (16 / 44); // the logo's own 44 by 16 ellipse
-    rg.add(ruStroke(Array.from({ length: 40 }, (_, i) => { const a = (i / 40) * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * RX, Math.sin(a) * RY, 0); }),
+  for (const [tilt, yaw, period, phase] of [[-RU_TILT, 0, 7, 0], [RU_TILT, Math.PI / 2, 9.5, 4]]) {
+    const rg = new THREE.Group(); rg.rotation.set(-Math.PI / 2 + tilt, yaw, 0); orbits.add(rg);
+    const RX = 44 * RU_S * 0.72;
+    rg.add(ruStroke(Array.from({ length: 40 }, (_, i) => { const a = (i / 40) * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * RX, Math.sin(a) * RX, 0); }),
       new THREE.MeshBasicMaterial({ color: '#C9B3FF', transparent: true, opacity: 0.42, fog: false, toneMapped: false }), RU_W * 0.6, true));
     const bead = new THREE.Mesh(new THREE.SphereGeometry(RU_W * 2.6, 10, 8), new THREE.MeshBasicMaterial({ color: '#C9B3FF', fog: false, toneMapped: false }));
-    rg.add(bead); rings.push({ bead, period, phase, RX, RY });
+    rg.add(bead); rings.push({ bead, period, phase, RX, RY: RX });
   }
   const halo = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), new THREE.MeshBasicMaterial({ map: poolTex(), color: '#C9B3FF', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
   halo.rotation.x = -Math.PI / 2; scene.add(halo);
@@ -624,7 +630,7 @@ function makeSage() {
     m.visible = false; scene.add(m); return { m, t: 1 };
   });
   scene.add(g);
-  Object.assign(guru, { g, robe: ink, head: parts, spark, core, light, halo, rings, motes, mote: 0, emit: 0, arrive: 1 });
+  Object.assign(guru, { g, card, orbits, robe: ink, head: parts, spark, core, light, halo, rings, motes, mote: 0, emit: 0, arrive: 1 });
 }
 /// Send Ru to hover over one item on the map. Null lets it drift back out.
 function ruLookAt(key) { guru.key = key ?? null; if (key) ruShow(true); }
@@ -648,7 +654,8 @@ function updateRuBody(dt, now) {
     guru.y = smooth(guru.y, ty, 1 - Math.exp(-dt * 1.4));
   }
   guru.g.position.set(guru.x, guru.y, guru.z);
-  guru.g.quaternion.copy(camera.quaternion); // always square to the camera, so it stays the logo
+  guru.card.quaternion.copy(camera.quaternion); // the figure alone stays square to the camera, so it stays the logo
+  if (!REDUCED) guru.orbits.rotation.y += dt * 0.3; // the orbits keep their own slow turn in world space
   // called in: it lays a soft wisp behind it for a moment, then travels clean
   if (guru.arrive < 1 && !REDUCED) {
     guru.arrive = Math.min(1, guru.arrive + dt / 2.2);
@@ -1283,8 +1290,8 @@ function renderCleanup() {
   for (const [p] of picked) { const f = list.find((c) => c.path === p); if (f) picked.set(p, f); } // sizes and idle flags match the view you act from
   // hidden folders drop out, then the headline and cards count only the tiers that are switched on, so they always agree with the list below
   const kindsAll = (idle
-    ? [...new Set(list.map((c) => c.reason))].map((id) => { const its = list.filter((c) => c.reason === id); return [id, its[0].tier, its[0].what, sumOf(its), its.length]; })
-    : s.kinds).map(([id, tier, what, size, n]) => { const gone = list.filter((c) => c.reason === id && hiddenUnder(c.path)); return [id, tier, what, size - sumOf(gone), n - gone.length]; }).filter((k) => k[4] > 0);
+    ? [...new Set(list.map(kindKey))].map((k) => { const its = list.filter((c) => kindKey(c) === k); return [its[0].reason, its[0].tier, its[0].what, sumOf(its), its.length]; })
+    : s.kinds).map(([id, tier, what, size, n]) => { const gone = list.filter((c) => inKind(c, id, tier) && hiddenUnder(c.path)); return [id, tier, what, size - sumOf(gone), n - gone.length]; }).filter((k) => k[4] > 0);
   const tierOf = (t) => kindsAll.filter((k) => k[1] === t).reduce((a, k) => [a[0] + k[3], a[1] + k[4]], [0, 0]);
   const tierSums = ['safe', 'likely', 'review', 'note'].map((t) => [t, ...tierOf(t)]);
   const sum = (pred) => tierSums.filter((t) => pred(t) && tiersOn.has(t[0])).reduce((a, t) => a + t[1], 0);
@@ -1317,7 +1324,7 @@ function renderCleanup() {
   if (!kinds.length) { groups.innerHTML = '<div class="empty">Nothing flagged in this folder. Explore the map or scan somewhere else.</div>'; return; }
   const base = current.path ? current.path + '/' : '';
   kinds.forEach(([id, tier, what, size, n], i) => {
-    const items = list.filter((c) => c.reason === id && !hiddenUnder(c.path));
+    const items = list.filter((c) => inKind(c, id, tier) && !hiddenUnder(c.path));
     const d = document.createElement('details'); d.className = 'grp'; d.style.setProperty('--c', TIER_HEX[tier]);
     d.open = kindsTouched ? openKinds.has(id) : i < 2;
     d.ontoggle = () => { kindsTouched = true; d.open ? openKinds.add(id) : openKinds.delete(id); };
@@ -1341,6 +1348,10 @@ function renderCleanup() {
 const picked = new Map(); // path -> candidate, kept while you browse so you can gather from several folders
 let shelfList = [];
 const sumOf = (rows) => rows.reduce((s, r) => s + r.size, 0);
+// A group is a reason *and* a tier: one open file demotes a single item out of an otherwise safe
+// group, so the server reports the two halves separately and the panel must keep them apart.
+const kindKey = (c) => c.reason + '\u0000' + c.tier;
+const inKind = (c, id, tier) => c.reason === id && c.tier === tier;
 function renderPickBar() {
   saveState();
   const bar = $('#clean-bar'); bar.hidden = !picked.size; if (!picked.size) return;
@@ -1732,12 +1743,19 @@ function beginScanUi(root) {
   $('#hint').textContent = 'Di: search party out. My choppers hover over every folder still being counted and drop in what they find. Space holds the camera.';
 }
 async function watchScan() {
+  // The last few seconds of a big scan count nothing: every file is in, and the walk is folding
+  // millions of nodes back into one tree. The counter sits still through that, so say the map is
+  // being put together rather than leave a frozen number and a spinning cursor.
+  let lastLine = '', movedAt = performance.now();
   for (;;) {
     const s = await api('/api/status');
     if (s.state === 'done') return s;
     if (s.state !== 'scanning' && s.state !== 'idle') throw new Error('scan stopped');
     if (s.state === 'idle') throw new Error('cancelled'); // the user gave up on it
-    $('#stats').className = 'live'; $('#stats').textContent = `Scanning · ${fmtN(s.files)} files · ${fmt(s.size)}`;
+    const line = `Scanning · ${fmtN(s.files)} files · ${fmt(s.size)}`; // what the eye sees move, not the raw count behind it
+    if (line !== lastLine) { lastLine = line; movedAt = performance.now(); }
+    const settling = performance.now() - movedAt > 1500;
+    $('#stats').className = 'live'; $('#stats').textContent = settling ? `Di: ${fmtN(s.files)} files counted. Putting the map together\u2026` : line;
     $('#stats').insertAdjacentHTML('beforeend', ' <button class="stopscan" type="button">Stop</button>');
     $('#stats').querySelector('.stopscan').onclick = () => { api('/api/scan/stop', {}).catch(() => {}); toast('Di: calling the search party back', 'du'); };
     if (mode === 'disk') { setBlocks(entriesFor(s.live, { live: true })); crewAssign(s.live); }
@@ -1746,6 +1764,9 @@ async function watchScan() {
 }
 async function finishScan() {
   scanning = false; delete document.body.dataset.scanning; scanDone = true; version = null; views.clear(); mapAsOf = null; deniedShown = false;
+  // sizing up what can go reads the disk again, so on a big root there are a few seconds here with
+  // nothing on screen: say what is happening rather than leave the last scanning line frozen
+  $('#stats').className = 'live'; $('#stats').textContent = 'Di: sizing up what can go\u2026';
   await loadState();
   if (mode !== 'disk') { rootSize = (await api('/api/status')).size || 1; await loadDrive(); return; } // finished while Me was up; the map waits until you come back $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
   const st = await api('/api/status');
@@ -2495,8 +2516,8 @@ function exportReport() {
   const abs = (p) => rootPath + (p ? '/' + p : '');
   const L = [`# DiMe cleanup report`, ``, `- Scan root: ${rootPath || '/'}`, `- Folder: ${abs(current.path)} · ${nodeInfo(current)}`, filter === 'idle' ? `- Filter: only items untouched for ${idleDays}+ days` : '', `- Generated: ${new Date().toLocaleString()}`,
     `- How to read this: Di sorts candidates into four groups. "Safe to remove" is rebuilt automatically; "Probably safe" is usually fine after a glance; "Worth a look" is big or consequential and your call; "Just so you know" is inventory, listed without any suggestion. Anything a running program had open at scan time is moved down a group and says so. Sizes are on-disk. Shelving moves an item into ~/.dime/shelf, still on the disk and reversible; deleting is permanent and is what frees the space.`, ``];
-  const totals = filter === 'idle' ? new Map() : new Map(summaryData.kinds.map(([id, , , size, n]) => [id, [size, n]]));
-  const list = cleanList(), kinds = [...new Set(list.map((c) => c.reason))].map((id) => { const items = list.filter((c) => c.reason === id && !hiddenUnder(c.path)), [size, n] = totals.get(id) ?? [sumOf(items), items.length]; return { id, tier: items[0]?.tier, what: items[0]?.what, size: Math.max(size, sumOf(items)), n: Math.max(n, items.length), items }; }).filter((k) => k.items.length).sort((x, y) => TIER_ORDER[x.tier] - TIER_ORDER[y.tier] || y.size - x.size);
+  const totals = filter === 'idle' ? new Map() : new Map(summaryData.kinds.map(([id, tier, , size, n]) => [id + '\u0000' + tier, [size, n]]));
+  const list = cleanList(), kinds = [...new Set(list.map(kindKey))].map((k) => { const items = list.filter((c) => kindKey(c) === k && !hiddenUnder(c.path)), [size, n] = totals.get(k) ?? [sumOf(items), items.length], id = k.split('\u0000')[0]; return { id, tier: items[0]?.tier, what: items[0]?.what, size: Math.max(size, sumOf(items)), n: Math.max(n, items.length), items }; }).filter((k) => k.items.length).sort((x, y) => TIER_ORDER[x.tier] - TIER_ORDER[y.tier] || y.size - x.size);
   const tierTotal = (t) => kinds.filter((k) => k.tier === t).reduce((a, k) => [a[0] + k.size, a[1] + k.n], [0, 0]);
   L.push(`## Totals`, ``, ...['safe', 'likely', 'review', 'note'].map((t) => { const [sz, n] = tierTotal(t); return `- ${TIER_LABEL[t]}: ${fmt(sz)} · ${n} item${n === 1 ? '' : 's'}`; }), ``);
   let last = null;

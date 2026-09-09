@@ -197,7 +197,7 @@ pub struct OpenFile {
 
 /// Regular files a process has open, via `lsof`. Own processes only without root.
 pub fn open_files(pid: u32) -> Vec<OpenFile> {
-    let Ok(out) = Command::new("lsof").args(["-p", &pid.to_string(), "-Ftn", "-w"]).output() else { return vec![] };
+    let Ok(out) = Command::new("lsof").args(["-p", &pid.to_string(), "-Ftn", "-w", "-n"]).output() else { return vec![] };
     let text = String::from_utf8_lossy(&out.stdout);
     let mut files = vec![];
     let mut is_reg = false;

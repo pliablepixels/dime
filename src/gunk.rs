@@ -117,6 +117,10 @@ fn ollama_models(store: &Path) -> HashMap<PathBuf, (String, u64)> {
 
 /// Every regular file a running process has open, as absolute paths. One lsof sweep for the whole
 /// machine, cached briefly because find_all runs again on every tree change.
+///
+/// `-n` is not optional: without it lsof resolves the peer address of every network socket on the
+/// machine, which took ten seconds on the machine this was written on and is the whole reason the
+/// first Cleanup panel after a scan used to hang. Nothing here reads socket names anyway.
 fn open_paths() -> Vec<String> {
     static CACHE: Mutex<Option<(SystemTime, Arc<Vec<String>>)>> = Mutex::new(None);
     let mut c = CACHE.lock().unwrap();
@@ -126,7 +130,7 @@ fn open_paths() -> Vec<String> {
         }
     }
     let mut out = vec![];
-    if let Ok(o) = std::process::Command::new("lsof").args(["-Fn", "-w"]).output() {
+    if let Ok(o) = std::process::Command::new("lsof").args(["-Fn", "-w", "-n"]).output() {
         for line in String::from_utf8_lossy(&o.stdout).lines() {
             if let Some(p) = line.strip_prefix('n') {
                 if p.starts_with('/') && !p.starts_with("/System/") && !p.starts_with("/usr/") && !p.starts_with("/dev/") {
