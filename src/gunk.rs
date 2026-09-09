@@ -80,6 +80,23 @@ fn human(b: u64) -> String {
     }
     if i == 0 { format!("{b} B") } else if v < 10.0 { format!("{v:.1} {}", U[i]) } else { format!("{v:.0} {}", U[i]) }
 }
+/// In the idle view a row's size is the bytes inside it that are old enough, but its note was
+/// written about the item itself. A folder written to yesterday can hold gigabytes untouched for
+/// months, and "Idle 1 days" under a heading reading "untouched 30 days+" looks like a
+/// contradiction. So for a folder the sentence is rewritten to say which of the two ages it is.
+/// A file is its own age and only shows up when it is old enough, so its note is left alone.
+pub fn note_for_idle(note: &str, is_dir: bool, age_days: i64, days: i64) -> String {
+    if !is_dir {
+        return note.to_string();
+    }
+    let own = format!("Idle {}.", months(age_days));
+    let said = format!("Touched {} ago itself; what is counted here is the files inside it untouched {days}+ days.", months(age_days));
+    if note.contains(&own) {
+        return note.replace(&own, &said);
+    }
+    note.replace("Age unknown.", &format!("What is counted here is the files inside it untouched {days}+ days."))
+}
+
 fn months(days: i64) -> String {
     if days < 60 { format!("{days} days") } else if days < 730 { format!("{} months", days / 30) } else { format!("{:.1} years", days as f64 / 365.0) }
 }
@@ -467,6 +484,15 @@ mod tests {
         let mut out = vec![];
         name_ollama(&dir, &mut out, Some(store));
         assert!(out.is_empty());
+
+        // in the idle view a folder's own timestamp is not what picked the files inside it
+        let n = "Debug symbols for one OS version. Idle 9 days.";
+        let out = note_for_idle(n, true, 9, 30);
+        assert!(!out.contains("Idle 9 days"), "the bare count reads as a contradiction: {out}");
+        assert!(out.contains("Touched 9 days ago itself"), "{out}");
+        assert!(out.contains("untouched 30+ days"), "{out}");
+        assert_eq!(note_for_idle(n, false, 40, 30), n, "a file is its own age, so leave it be");
+        assert!(note_for_idle("Age unknown.", true, 0, 30).contains("untouched 30+ days"));
 
         // a rule's command is not runnable until the name it asks for is known
         assert!(!runnable("ollama rm {model}"));

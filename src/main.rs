@@ -563,7 +563,12 @@ async fn gunk_list(State(app): State<Shared>, Query(q): Query<GunkQ>) -> Result<
             let mut out: Vec<gunk::Candidate> = gunk::under(&all, &q.path)
                 .filter_map(|c| {
                     let idle = scan::get(t, &c.path).map(|n| gunk::idle_bytes(n, cutoff)).unwrap_or(0);
-                    (idle > 0).then(|| gunk::Candidate { size: idle, full_size: Some(c.size), ..c.clone() })
+                    (idle > 0).then(|| gunk::Candidate {
+                        size: idle,
+                        full_size: Some(c.size),
+                        note: gunk::note_for_idle(&c.note, c.is_dir, c.age_days, days),
+                        ..c.clone()
+                    })
                 })
                 .collect();
             out.sort_by(|a, b| b.size.cmp(&a.size));
