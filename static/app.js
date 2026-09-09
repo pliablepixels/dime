@@ -1292,6 +1292,8 @@ function renderCleanup() {
   const vb = document.createElement('button'); vb.id = 'shelf'; vb.className = 'btn sm quiet'; vb.textContent = 'Shelf'; vb.title = 'Shelved items, still on your disk, put back any time'; vb.style.marginTop = '10px'; vb.onclick = openShelf; head.appendChild(vb);
   api('/api/shelf').then((v) => { shelfList = v; if (v.length) vb.textContent = `Shelf · ${v.length} · ${fmt(sumOf(v))}`; }).catch(() => {});
   if (picked.size) { const lb = document.createElement('button'); lb.className = 'btn sm quiet'; lb.textContent = `Shortlist · ${picked.size}`; lb.title = 'Review the shortlist; shelve or delete from there'; lb.style.marginTop = '10px'; lb.style.marginLeft = '8px'; lb.onclick = () => listDialog([...picked.values()].map(candRow)); head.appendChild(lb); }
+  const cb = document.createElement('button'); cb.className = 'btn sm quiet'; cb.textContent = 'What changed'; cb.title = 'What grew or shrank since the last time this drive was mapped';
+  cb.style.marginLeft = '8px'; cb.style.marginTop = '10px'; cb.onclick = showChanges; head.appendChild(cb);
   const xb = document.createElement('button'); xb.className = 'btn sm quiet'; xb.textContent = 'Export'; xb.title = 'Save this cleanup view as a Markdown report'; xb.style.marginTop = '10px'; xb.style.marginLeft = '8px'; xb.onclick = exportReport; head.appendChild(xb);
   const scope = head.querySelector('.scope');
   scope.textContent = `${idle ? `untouched ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+ · ` : ''}${current.path ? `in ${current.name} · ` : `in ${rootName}, ${fmtN(current.files)} files`}`;
@@ -1443,6 +1445,24 @@ async function idleFilesDialog(path, name, back) {
       : 'Nothing of 1 MB or more inside this has been idle that long.',
     rows, select: false,
     actions: back ? [{ label: () => 'Back to the shortlist', fn: () => listDialog([...picked.values()].map(candRow)) }] : [],
+  });
+}
+// What moved since the previous map of this drive. Worked out at rescan time, because the snapshot
+// is overwritten immediately afterwards.
+async function showChanges() {
+  let d;
+  try { d = await api('/api/changes'); } catch (e) { toast(`Di: ${e.message}`, 'du'); return; }
+  const rows = (d.changes ?? []).map((c) => ({
+    key: c.path, name: c.name, is_dir: c.is_dir, size: Math.abs(c.delta),
+    sub: [parentOf(c.path) || rootName, c.was === 0 ? 'new since then' : c.size === 0 ? 'gone since then' : `${fmt(c.was)} then, ${fmt(c.size)} now`].filter(Boolean).join(' · '),
+  }));
+  const net = d.size - d.was;
+  openDialog({
+    title: 'What changed',
+    sub: rows.length
+      ? `Against the map from ${ago(d.at)}. The drive is ${net >= 0 ? 'up' : 'down'} ${fmt(Math.abs(net))} overall, ${fmt(d.was)} then against ${fmt(d.size)} now. Biggest movers first, reported at the level that explains them.`
+      : `Nothing has moved by more than 16 MB since ${ago(d.at)}.`,
+    rows, select: false, actions: [],
   });
 }
 async function openShelf() {

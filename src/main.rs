@@ -41,6 +41,9 @@ struct App {
     ru: Mutex<ru::Ru>,
     /// The shelve or delete running right now, as (verb, done, total), so the UI can show it moving.
     job: Mutex<Option<(String, u64, u64)>>,
+    /// What moved between the previous saved map and this one, worked out at the moment of the
+    /// rescan: the snapshot is overwritten straight afterwards, so there is no second chance.
+    changes: Mutex<Option<serde_json::Value>>,
 }
 
 /// Claims the one job slot. Refuses while another batch is running, so a second window or an
@@ -174,6 +177,7 @@ async fn serve() -> String {
         watcher: Mutex::new(None),
         ru: Mutex::new(ru::detect(&ru::load_settings())),
         job: Mutex::new(None),
+        changes: Mutex::new(None),
     });
     // Apply queued filesystem changes once a second, coalesced.
     let app_bg = app.clone();
@@ -198,6 +202,7 @@ async fn serve() -> String {
         .route("/api/scan", post(start_scan))
         .route("/api/scan/stop", post(stop_scan))
         .route("/api/resume", post(resume))
+        .route("/api/changes", get(changes))
         .route("/api/state", get(state_get).post(state_set))
         .route("/api/status", get(status))
         .route("/api/tree", get(tree))
@@ -345,6 +350,10 @@ async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Resu
             println!("  scan cancelled");
             return;
         }
+        // against the map as it was, before the new one lands on top of it
+        *app2.changes.lock().unwrap() = snapshot::load(&root).ok().map(|(meta, old)| {
+            serde_json::json!({ "at": meta.at, "was": meta.size, "size": tree.size, "changes": snapshot::changes(&old, &tree, 40) })
+        });
         let _ = snapshot::save(&root, &tree); // next launch opens this map at once
         println!("  scanned {} files, {:.1} GB in {:.1}s; snapshot in {:.1}s", tree.files, tree.size as f64 / 1e9, scanned.as_secs_f64(), t1.elapsed().as_secs_f64());
         *app2.watcher.lock().unwrap() = watch(&app2, &root);
@@ -866,6 +875,12 @@ async fn ru_set(State(app): State<Shared>, Json(cfg): Json<ru::Settings>) -> Res
 }
 
 // ---------- resume from a snapshot, and the per-root state file ----------
+
+/// What moved since the last saved map of this root. The snapshot is written at the end of every
+/// scan, so this answers "what grew since I last looked" without keeping any extra history.
+async fn changes(State(app): State<Shared>) -> Result<Json<serde_json::Value>, ApiErr> {
+    app.changes.lock().unwrap().clone().map(Json).ok_or_else(|| bad("nothing to compare with yet: scan this drive once more and DiMe will tell you what moved"))
+}
 
 /// Open the last map of a root from its snapshot: no rescan, the watcher picks up from here.
 async fn resume(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<Json<snapshot::Meta>, ApiErr> {

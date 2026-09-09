@@ -1,6 +1,6 @@
 //! Snapshots: the finished tree written to ~/.dime/snapshots so the next launch opens the last map
 //! at once instead of rescanning. Plain length-prefixed binary, no dependencies, ~30 bytes a node.
-use crate::scan::Node;
+use crate::scan::{join, Node};
 use serde::Serialize;
 use std::fs;
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -123,6 +123,67 @@ fn open(f: &Path) -> io::Result<(BufReader<fs::File>, Meta)> {
 pub fn list() -> Vec<Meta> {
     let mut out: Vec<Meta> = fs::read_dir(dir()).map(|rd| rd.filter_map(Result::ok).filter(|e| e.path().extension().is_some_and(|x| x == "dime")).filter_map(|e| open(&e.path()).ok().map(|(_, m)| m)).collect()).unwrap_or_default();
     out.sort_by(|a, b| b.at.cmp(&a.at));
+    out
+}
+
+#[derive(Serialize)]
+pub struct Change {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    /// Size now. Zero means it is gone.
+    pub size: u64,
+    /// Size when the snapshot was taken. Zero means it is new.
+    pub was: u64,
+    /// now minus was, so growth is positive.
+    pub delta: i64,
+}
+
+/// What changed between the saved map and the one in memory, biggest movers first. Compared at the
+/// shallowest level that tells the story: a folder that grew is reported once, not as every file
+/// inside it, unless the change is spread across several of its children.
+pub fn changes(old: &Node, new: &Node, limit: usize) -> Vec<Change> {
+    let mut out = vec![];
+    fn walk(old: Option<&Node>, new: Option<&Node>, path: &str, depth: usize, out: &mut Vec<Change>) {
+        let (was, size) = (old.map_or(0, |n| n.size), new.map_or(0, |n| n.size));
+        let delta = size as i64 - was as i64;
+        if delta.unsigned_abs() < (16 << 20) {
+            return; // below 16 MB is noise on any real disk
+        }
+        let node = new.or(old).unwrap();
+        // keep descending while one child accounts for nearly all of the change, so the answer is
+        // "Xcode's DerivedData grew" rather than "your home grew"
+        if depth < 6 {
+            if let Some(n) = new {
+                let mut best: Option<(&Node, Option<&Node>, i64)> = None;
+                for c in &n.children {
+                    let o = old.and_then(|x| x.children.iter().find(|k| k.name == c.name));
+                    let d = c.size as i64 - o.map_or(0, |k| k.size) as i64;
+                    if best.is_none_or(|(_, _, bd)| d.abs() > bd.abs()) {
+                        best = Some((c, o, d));
+                    }
+                }
+                if let Some((c, o, d)) = best {
+                    if d.abs() as f64 > delta.abs() as f64 * 0.8 {
+                        walk(o, Some(c), &join(path, &c.name), depth + 1, out);
+                        return;
+                    }
+                }
+            }
+        }
+        out.push(Change { path: path.to_string(), name: node.name.clone(), is_dir: node.is_dir, size, was, delta });
+    }
+    for c in &new.children {
+        let o = old.children.iter().find(|k| k.name == c.name);
+        walk(o, Some(c), &c.name, 1, &mut out);
+    }
+    for c in &old.children {
+        if !new.children.iter().any(|k| k.name == c.name) {
+            walk(Some(c), None, &c.name, 1, &mut out);
+        }
+    }
+    out.sort_by_key(|c| -c.delta.abs());
+    out.truncate(limit);
     out
 }
 
