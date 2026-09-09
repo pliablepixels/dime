@@ -3,6 +3,7 @@
 # make app        double-clickable Mac app with its icon  -> dist/DiMe.app, dist/DiMe-<ver>-macos.zip
 # make icon       redraw the icon from tools/make-icon.py -> packaging/DiMe.icns
 # make release V=0.2.0   bump version, tag, build both, publish a GitHub release
+#                        NOTES=file.md attaches written release notes instead of generated ones
 
 # rustup's toolchain has both targets; a Homebrew rust on PATH does not
 CARGO   := $(shell rustup which cargo 2>/dev/null || echo cargo)
@@ -12,6 +13,8 @@ NAME    := dime
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 TARGETS := aarch64-apple-darwin x86_64-apple-darwin
 TARBALL := dist/$(NAME)-$(VERSION)-macos.tar.gz
+# hand-written notes if you have them, GitHub's commit list if you do not
+NOTEFLAG := $(if $(NOTES),--notes-file $(NOTES),--generate-notes)
 
 APPDIR  := dist/DiMe.app
 APPZIP  := dist/DiMe-$(VERSION)-macos.zip
@@ -61,5 +64,5 @@ release: check-clean
 	git tag v$(V)
 	git push -q origin master v$(V)
 	$(MAKE) app VERSION=$(V)
-	gh release create v$(V) --generate-notes --title "v$(V)" \
+	gh release create v$(V) $(NOTEFLAG) --title "v$(V)" \
 		dist/DiMe-$(V)-macos.zip dist/$(NAME)-$(V)-macos.tar.gz
