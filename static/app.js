@@ -157,7 +157,7 @@ function setLabel(m, entry, big) {
   } else if (!big && m.userData.label) {
     m.userData.label.element.remove(); m.remove(m.userData.label); m.userData.label = null;
   }
-  if (m.userData.label) m.userData.label.element.innerHTML = `${entry.name}<small>${entry.sub}</small>`;
+  if (m.userData.label) { m.userData.label.element.innerHTML = `${entry.name}<small>${entry.sub}</small>`; m.userData.label.visible = true; }
 }
 /**
  * entries: [{key, name, sub, node, rect:{x,z,w,h}, y, color, em, pulse}]
@@ -1084,6 +1084,10 @@ function showMenu(x, y, n) {
   add(n.is_dir ? 'Open in Finder' : 'Reveal in Finder', () => api('/api/open', { path: n.path }).catch((e) => toast(e.message)));
   if (n.is_dir && n.path !== current.path) add('Explore here', () => { const m = byKey.get(n.path); m ? enter(m) : navigate(n.path); });
   add('Copy path', () => navigator.clipboard?.writeText(rootPath + '/' + n.path).then(() => toast('Path copied')));
+  if (n.is_dir) add('Recount this folder', async () => { // cheaper than rescanning the whole drive
+    try { await api('/api/scan/here', { path: n.path }); } catch (e) { return toast(`Di: ${e.message}`, 'du'); }
+    await refresh({ force: true }); toast(`Di: recounted ${n.name || rootName}`, 'du');
+  });
   if (n.path) add('Send to Ru', () => ruTake(n.path, 'menu'));
   if (n.path && n.path !== current.path) add('Hide from map', () => { hiddenPaths.set(n.path, n); for (const [p] of picked) if (p === n.path || p.startsWith(n.path + '/')) picked.delete(p); saveState(); navigate(current.path); toast(`Di: ${n.name} hidden · ${fmt(n.size)}`, 'du'); });
   const w = menu.offsetWidth, h = menu.offsetHeight;
@@ -1391,7 +1395,16 @@ function candRowEl(c, base, depth) {
   if (c.full_size != null && c.full_size !== c.size) { const pk = document.createElement('button'); pk.type = 'button'; pk.textContent = 'Files'; pk.title = 'See which files would actually move'; pk.onclick = (e) => { e.stopPropagation(); idleFilesDialog(c.path, c.name, false); }; row.querySelector('.acts').prepend(pk); }
   row.onmouseenter = () => (rowHover = base + rel.split('/')[0]); row.onmouseleave = () => (rowHover = null);
   row.onclick = () => { if (!c.is_dir) { pk.checked = !pk.checked; pk.onchange(); return; } openRows.has(c.path) ? openRows.delete(c.path) : openRows.add(c.path); renderCleanup(); };
-  row.onkeydown = (e) => { if (e.key === 'Enter') row.onclick(); };
+  row.onkeydown = (e) => {
+    if (e.key === 'Enter') return row.onclick();
+    if (e.key === ' ') { e.preventDefault(); pk.checked = !pk.checked; pk.onchange(); return; } // space ticks, like a checkbox
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { // walk the list without reaching for the mouse
+      e.preventDefault();
+      const rows = [...$('#clean-groups').querySelectorAll('.row[data-key]')];
+      const i = rows.indexOf(row) + (e.key === 'ArrowDown' ? 1 : -1);
+      rows[Math.max(0, Math.min(rows.length - 1, i))]?.focus();
+    }
+  };
   wrap.appendChild(row);
   if (c.is_dir && openRows.has(c.path)) {
     const key = c.path + (filter === 'idle' ? `@${idleDays}` : ''), kids = kidCache.get(key);
@@ -1838,6 +1851,26 @@ api('/api/status').then(async (s) => {
   await enterMap(s);
 });
 
+// Labels collide on a busy map and end up unreadable. Every few frames, project each one to the
+// screen and keep only the biggest where several land on the same spot.
+const _lv = new THREE.Vector3();
+let _cullAt = 0;
+function cullLabels(now) {
+  if (now - _cullAt < 120) return;
+  _cullAt = now;
+  const shown = [];
+  const labelled = [...byKey.values()].filter((m) => m.userData.label).sort((a, b) => b.scale.x * b.scale.z - a.scale.x * a.scale.z);
+  for (const m of labelled) {
+    const l = m.userData.label;
+    _lv.setFromMatrixPosition(m.matrixWorld).project(camera);
+    if (Math.abs(_lv.x) > 1.1 || Math.abs(_lv.y) > 1.1 || _lv.z > 1) { l.visible = false; continue; }
+    const x = (_lv.x + 1) / 2 * innerWidth, y = (1 - _lv.y) / 2 * innerHeight;
+    const clash = shown.some((p) => Math.abs(p[0] - x) < 96 && Math.abs(p[1] - y) < 26);
+    l.visible = !clash;
+    if (!clash) shown.push([x, y]);
+  }
+}
+
 // ---------- loop ----------
 let last = performance.now(), spinUntil = 0;
 renderer.setAnimationLoop((now) => {
@@ -1856,6 +1889,7 @@ renderer.setAnimationLoop((now) => {
   updateWorld(dt, now);
   updateBlocks(dt, now); updateRipples(dt, now); updateSparks(dt); updateDust(dt, now);
   if (mode === 'mem') { updateOrbit(dt, now); updateShip(dt, now); updateOrbitHover(); } else if (current) updateHover();
+  cullLabels(now);
   composer.render();
   labelR.render(scene, camera);
 });

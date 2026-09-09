@@ -355,6 +355,35 @@ pub fn get<'a>(root: &'a Node, rel: &str) -> Option<&'a Node> {
 
 /// Apply one filesystem change at `abs` to the tree: re-stat the path, then replace, insert, or
 /// remove its node and roll the size/file delta up through every ancestor.
+/// Re-walk one folder and splice the result back in, keeping every ancestor's totals right. After
+/// a big clear-out this beats re-walking millions of files to learn about one folder.
+pub fn rescan_at(root_node: &mut Node, root: &Path, abs: &Path) -> Option<u64> {
+    let rel = abs.strip_prefix(root).ok()?;
+    let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let dev = fs::symlink_metadata(root).ok()?.dev();
+    let fresh = scan_dir(abs, &AtomicU64::new(0), &AtomicU64::new(0), &std::array::from_fn(|_| AtomicU64::new(0)), dev, &skip_list(root));
+    fn go(n: &mut Node, parts: &[String], fresh: Node) -> Option<(i64, i64)> {
+        let i = n.children.iter().position(|c| c.name == parts[0])?;
+        let d = if parts.len() == 1 {
+            let old = &n.children[i];
+            let d = (fresh.size as i64 - old.size as i64, fresh.files as i64 - old.files as i64);
+            n.children[i] = fresh;
+            d
+        } else {
+            go(&mut n.children[i], &parts[1..], fresh)?
+        };
+        n.size = (n.size as i64 + d.0).max(0) as u64;
+        n.files = (n.files as i64 + d.1).max(0) as u64;
+        n.children.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+        Some(d)
+    }
+    let size = fresh.size;
+    go(root_node, &parts, fresh).map(|_| size)
+}
+
 pub fn patch(root_node: &mut Node, root: &Path, abs: &Path) {
     let Ok(rel) = abs.strip_prefix(root) else { return };
     let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();

@@ -201,6 +201,7 @@ async fn serve() -> String {
         .route("/api/ls", get(ls))
         .route("/api/scan", post(start_scan))
         .route("/api/scan/stop", post(stop_scan))
+        .route("/api/scan/here", post(rescan_here))
         .route("/api/resume", post(resume))
         .route("/api/changes", get(changes))
         .route("/api/state", get(state_get).post(state_set))
@@ -323,6 +324,23 @@ async fn stop_scan(State(app): State<Shared>) -> StatusCode {
         scan::stop_scan();
     }
     if running { StatusCode::ACCEPTED } else { StatusCode::NO_CONTENT }
+}
+
+/// Re-walk one folder rather than the whole drive. After clearing something out, this is the
+/// difference between a beat and a walk of millions of files.
+async fn rescan_here(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let (_, abs) = resolve(&app, &req.path)?;
+    let app2 = app.clone();
+    let size = tokio::task::spawn_blocking(move || {
+        let mut s = app2.scan.lock().unwrap();
+        let ScanState::Done { root, tree, .. } = &mut *s else { return None };
+        scan::rescan_at(tree, &root.clone(), &abs)
+    })
+    .await
+    .unwrap()
+    .ok_or_else(|| bad("that folder is not on the current map"))?;
+    app.version.fetch_add(1, Ordering::Relaxed);
+    Ok(Json(serde_json::json!({ "size": size })))
 }
 
 async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<StatusCode, ApiErr> {
