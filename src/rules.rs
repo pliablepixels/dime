@@ -37,6 +37,13 @@ pub struct Rule {
     pub min_size: u64,
     #[serde(default)]
     pub min_age_days: i64,
+    /// The tool that owns this, if one does. `ollama rm {name}` means DiMe must not unlink the
+    /// files itself: it runs that command, so the tool's own bookkeeping stays in step. Without it
+    /// Ollama keeps listing a model whose weights DiMe removed behind its back.
+    ///
+    /// Split on whitespace into argv and run without a shell; `{name}` becomes one argument.
+    /// It runs as you, from a file only you can write, so it can run anything you can.
+    pub remove_with: Option<String>,
     /// This is a container, not a thing to remove: match it only to say "keep looking inside".
     /// Without it, naming a folder stops the walk there and every finer rule below is unreachable.
     #[serde(default)]

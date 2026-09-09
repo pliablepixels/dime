@@ -88,6 +88,14 @@ min_size = "500 MB"
 min_age_days = 30
 ```
 
-All matchers are optional and every one given must hold: `name`, `ext`, `parent_ends_with`, `under` (an ancestor folder's name), `has_child` (names directly inside), `min_size`, `min_age_days`. The header of the built-in file documents each. A broken file is reported on stderr and ignored.
+All matchers are optional and every one given must hold: `name`, `ext`, `parent_ends_with`, `under` (an ancestor folder's name), `has_child` (names directly inside), `has_sibling` and `no_sibling` (names beside it), `min_size`, `min_age_days`. `descend = true` marks a folder as a container to look inside rather than something to remove. The header of the built-in file documents each. A broken file is reported on stderr and ignored.
+
+Some things are not DiMe's to delete. A rule can name the tool that owns them:
+
+```toml
+remove_with = "ollama rm {name}"
+```
+
+Deleting such an item runs that command instead of unlinking files, so the tool's own index stays right: remove Ollama's blobs by hand and `ollama ls` goes on listing a model whose weights are gone. `{name}` is filled in with the name DiMe worked out, the command runs without a shell, and shelving is refused for these, since there is no reversible half of `ollama rm`. It only applies to the store the `ollama` command actually talks to; a copy of a store on another drive is removed as plain files.
 
 Backend: Rust (axum, rayon, sysinfo, notify), in a WKWebView window via wry. Frontend: one HTML + one JS file, no build step. Three.js and the webfont are vendored under `static/vendor` and baked into the binary, so DiMe never touches the network.

@@ -29,6 +29,16 @@ pub struct Candidate {
     /// Set in the idle view: `size` is then the idle bytes inside, and this is the whole item.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_size: Option<u64>,
+    /// What removes this properly, when a tool owns it: `ollama rm qwen3:8b`. Deleting runs this
+    /// instead of unlinking. Still holding a `{name}` means the name was never resolved, so it is
+    /// not runnable and is ignored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remove_cmd: Option<String>,
+}
+
+/// A removal command with every placeholder filled in, ready to run.
+pub fn runnable(cmd: &str) -> bool {
+    !cmd.contains('{') && !cmd.trim().is_empty()
 }
 
 #[derive(Serialize)]
@@ -78,10 +88,13 @@ fn months(days: i64) -> String {
 /// Rules are re-read each time, so edits to ~/.dime/rules.toml show up on the next rescan.
 /// Ollama stores weights by content hash, so the map shows anonymous sha256 blobs where people
 /// expect model names. Its manifests hold the mapping: one file per model:tag, listing the layers
-/// it is made of. Returns blob path -> (model name, size of the whole model).
-fn ollama_models(store: &Path) -> HashMap<PathBuf, (String, u64)> {
+/// it is made of. Returns blob path -> (model name, size of the whole model), and separately the
+/// manifests whose blobs are no longer on disk: `ollama ls` reads manifests, so a model whose
+/// weights were removed behind Ollama's back keeps being listed as if it were there.
+fn ollama_models(store: &Path) -> (HashMap<PathBuf, (String, u64)>, Vec<Orphan>) {
     let (manifests, blobs) = (store.join("manifests"), store.join("blobs"));
     let mut out = HashMap::new();
+    let mut orphans = vec![];
     let mut stack = vec![manifests.clone()];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
@@ -107,12 +120,31 @@ fn ollama_models(store: &Path) -> HashMap<PathBuf, (String, u64)> {
                 .map(|d| blobs.join(d.replace(':', "-")))
                 .collect();
             let total: u64 = paths.iter().filter_map(|b| std::fs::symlink_metadata(b).ok()).map(|m| m.len()).sum();
+            let missing: u64 = layers
+                .iter()
+                .filter(|l| !blobs.join(l["digest"].as_str().unwrap_or_default().replace(':', "-")).exists())
+                .filter_map(|l| l["size"].as_u64())
+                .sum();
+            if missing > 0 {
+                let size = std::fs::symlink_metadata(&p).map(|m| m.len()).unwrap_or(0);
+                orphans.push(Orphan { manifest: p.clone(), model: model.clone(), missing, size });
+            }
             for b in paths {
                 out.insert(b, (model.clone(), total));
             }
         }
     }
-    out
+    (out, orphans)
+}
+
+/// A model Ollama still lists although its weights are gone.
+struct Orphan {
+    manifest: PathBuf,
+    model: String,
+    /// bytes the manifest still claims, which are no longer on disk
+    missing: u64,
+    /// what the manifest file itself takes, which is all removing it actually frees
+    size: u64,
 }
 
 /// Every regular file a running process has open, as absolute paths. One lsof sweep for the whole
@@ -182,8 +214,8 @@ pub fn find_all(base: &Path, root: &Node) -> Vec<Candidate> {
 /// by. This is where DiMe puts it back: Ollama addresses blobs by hash, Hugging Face mangles
 /// org/name into a folder, and the rest are readable enough to leave alone. Rules decide what gets
 /// flagged and at what tier; this only improves how it reads.
-fn name_stores(base: &Path, out: &mut [Candidate]) {
-    name_ollama(base, out);
+fn name_stores(base: &Path, out: &mut Vec<Candidate>) {
+    name_ollama(base, out, ollama_store());
     name_huggingface(out);
 }
 
@@ -198,25 +230,77 @@ fn name_huggingface(out: &mut [Candidate]) {
 }
 
 /// Put model names back on Ollama's content-addressed blobs, once, after the walk.
-fn name_ollama(base: &Path, out: &mut [Candidate]) {
-    let stores: Vec<PathBuf> = out
+/// The one store the `ollama` command actually talks to. Its server holds this path, and it is not
+/// told which folder DiMe was looking at: `ollama rm` on a store copied to an external drive would
+/// remove the model from the machine's own store instead. So the command is only ever offered for
+/// this one, and any other store is a folder of files like any other.
+fn ollama_store() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("OLLAMA_MODELS") {
+        return Some(PathBuf::from(p));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".ollama").join("models"))
+}
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    real(a) == real(b)
+}
+
+fn name_ollama(base: &Path, out: &mut Vec<Candidate>, served: Option<PathBuf>) {
+    let mut stores: std::collections::HashSet<PathBuf> = out
         .iter()
         .filter(|c| c.reason == "ollama-model")
         .filter_map(|c| base.join(&c.path).parent().and_then(|p| p.parent()).map(Path::to_path_buf))
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
         .collect();
+    // a store whose blobs are all gone leaves no candidate to find it by, so the served one is
+    // looked at as well whenever the scan covers it
+    if let Some(s) = served.clone().filter(|s| s.starts_with(base) && s.join("manifests").is_dir()) {
+        stores.insert(s);
+    }
     if stores.is_empty() {
         return;
     }
     let mut map = HashMap::new();
+    let mut orphans = vec![];
     for s in stores {
-        map.extend(ollama_models(&s));
+        let ours = served.as_deref().is_some_and(|d| same_dir(&s, d));
+        let (m, o) = ollama_models(&s);
+        map.extend(m.into_iter().map(|(k, (model, total))| (k, (model, total, ours))));
+        orphans.extend(o.into_iter().map(|o| (o, ours)));
+    }
+    for (o, ours) in orphans {
+        let Ok(rel) = o.manifest.strip_prefix(base) else { continue };
+        let name = o.model;
+        out.push(Candidate {
+            path: rel.to_string_lossy().into_owned(),
+            size: o.size,
+            reason: "ollama-orphan".into(),
+            tier: "safe".into(),
+            what: "Ollama models with no weights".into(),
+            note: format!(
+                "Ollama still lists {name} at {}, but those weights are not on the disk any more: something removed them without telling Ollama. {} It frees only {}, because the weights are already gone.",
+                human(o.missing),
+                if ours { format!("Deleting this runs `ollama rm {name}`, which clears the entry.") } else { "This store is not the one the ollama command talks to, so deleting removes the entry file itself.".into() },
+                human(o.size)
+            ),
+            remove_cmd: ours.then(|| format!("ollama rm {name}")),
+            name,
+            age_days: 0,
+            is_dir: false,
+            score: 0.0,
+            full_size: None,
+        });
     }
     for c in out.iter_mut().filter(|c| c.reason == "ollama-model") {
-        if let Some((model, total)) = map.get(&base.join(&c.path)) {
+        if let Some((model, total, ours)) = map.get(&base.join(&c.path)) {
+            // only the served store: elsewhere the command would remove the wrong copy
+            c.remove_cmd = ours.then(|| c.remove_cmd.as_ref().map(|t| t.replace("{name}", model))).flatten();
             c.name = model.clone();
-            c.note = format!("The weights of {model}, {} in all. Remove it cleanly with `ollama rm {model}`, or shelve this and put it back later. {}", human(*total), c.note);
+            let how = if *ours {
+                format!("Deleting this hands it to Ollama as `ollama rm {model}`, so its own list stays right.")
+            } else {
+                "This store is not the one the ollama command talks to, so it is removed as plain files.".into()
+            };
+            c.note = format!("The weights of {model}, {} in all. {how} {}", human(*total), c.note);
         }
     }
 }
@@ -268,13 +352,14 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             is_dir: c.is_dir,
             score: c.size as f64 * rule.weight * (1.0 + age as f64 / 365.0),
             full_size: None,
+            remove_cmd: rule.remove_with.clone(),
         };
         if !c.is_dir && c.size >= 5 * MB {
             // duplicates need state across the walk, so this one stays built in
             let key = (c.size, c.name.clone());
             if let Some((other, other_m)) = w.seen.get(&key).cloned() {
                 if other_m >= c.mtime {
-                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false };
+                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false, remove_with: None };
                     w.out.push(mk(&dup, format!("Same name and size as {other}.")));
                     continue;
                 }
@@ -318,6 +403,75 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
 mod tests {
     use super::*;
     use crate::scan;
+
+    /// A model whose weights were removed behind Ollama's back: the manifest is still there, so
+    /// `ollama ls` still lists it, and DiMe has to offer the removal Ollama itself understands.
+    #[test]
+    fn ollama_entry_left_without_weights() {
+        let dir = std::env::temp_dir().join(format!("gunk-ollama-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = dir.join(".ollama/models");
+        std::fs::create_dir_all(store.join("blobs")).unwrap();
+        let m = store.join("manifests/registry.ollama.ai/library/qwen3");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(store.join("blobs/sha256-here"), b"weights").unwrap();
+        std::fs::write(
+            m.join("8b"),
+            br#"{"layers":[{"digest":"sha256:here","size":7},{"digest":"sha256:gone","size":5000000000}]}"#,
+        )
+        .unwrap();
+
+        let mut out = vec![];
+        name_ollama(&dir, &mut out, Some(store.clone()));
+        assert_eq!(out.len(), 1, "one entry, for the model whose blob is missing");
+        let c = &out[0];
+        assert_eq!(c.name, "qwen3:8b");
+        assert_eq!(c.reason, "ollama-orphan");
+        assert_eq!(c.remove_cmd.as_deref(), Some("ollama rm qwen3:8b"));
+
+        // the same store on a drive, found through a blob the walk flagged rather than through the
+        // served path: `ollama rm` would remove the model from this machine instead, so it is not
+        // offered, and the blob is removed as a plain file
+        let blob = Candidate {
+            path: ".ollama/models/blobs/sha256-here".into(),
+            name: "sha256-here".into(),
+            size: 7,
+            reason: "ollama-model".into(),
+            tier: "review".into(),
+            what: "Ollama models".into(),
+            note: String::new(),
+            age_days: 0,
+            is_dir: false,
+            score: 0.0,
+            full_size: None,
+            remove_cmd: Some("ollama rm {name}".into()),
+        };
+        let mut out = vec![blob.clone()];
+        name_ollama(&dir, &mut out, None);
+        assert_eq!(out.len(), 2, "the blob it was found by, and the entry with no weights");
+        assert!(out.iter().all(|c| c.remove_cmd.is_none()), "no command for a store ollama does not serve");
+        assert!(out.iter().all(|c| c.note.contains("not the one the ollama command talks to")));
+
+        // and served, that same blob is handed to ollama by name
+        let mut out = vec![blob];
+        name_ollama(&dir, &mut out, Some(store.clone()));
+        let b = out.iter().find(|c| c.reason == "ollama-model").unwrap();
+        assert_eq!(b.name, "qwen3:8b");
+        assert_eq!(b.remove_cmd.as_deref(), Some("ollama rm qwen3:8b"));
+        assert!(runnable(c.remove_cmd.as_deref().unwrap()), "no placeholder left to fill");
+        assert!(c.note.contains("4.7 GB"), "says what is missing, not what it frees: {}", c.note);
+        assert!(c.size < 1000, "removing the entry frees only the manifest itself");
+
+        // every blob present: nothing to report
+        std::fs::write(store.join("blobs/sha256-gone"), b"x").unwrap();
+        let mut out = vec![];
+        name_ollama(&dir, &mut out, Some(store));
+        assert!(out.is_empty());
+
+        // a rule's command is not runnable until the name it asks for is known
+        assert!(!runnable("ollama rm {name}"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn scan_flags_and_patches() {

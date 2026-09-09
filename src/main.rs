@@ -731,6 +731,26 @@ fn target(app: &App, rel: &str, cands: &[gunk::Candidate]) -> Result<(String, Pa
     Ok((rel, abs, size, note))
 }
 
+/// The command that owns this item, when a rule named one. `ollama rm qwen3:8b` rather than
+/// unlinking blobs Ollama still has in its index.
+fn owner_cmd(cands: &[gunk::Candidate], rel: &str) -> Option<String> {
+    cands.iter().find(|c| c.path == rel)?.remove_cmd.clone().filter(|c| gunk::runnable(c))
+}
+
+/// Run one of those. No shell: the template is split into argv, so a model name is one argument
+/// however it is spelled. The tool is looked up on the widened PATH, the same one Ru's CLIs use.
+fn run_owner(cmd: &str) -> Result<(), String> {
+    let mut argv = cmd.split_whitespace();
+    let tool = argv.next().ok_or("empty remove_with")?;
+    let exe = ru::found_at(tool).ok_or_else(|| format!("{tool} is not on the search path, so DiMe cannot let it remove this. Add its folder in Settings, or run `{cmd}` yourself."))?;
+    let out = std::process::Command::new(exe).args(argv).output().map_err(|e| format!("could not run {tool}: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    Err(format!("`{cmd}` failed: {}", err.lines().next().unwrap_or("no output").trim()))
+}
+
 /// Re-stat changed paths so the map and candidate list catch up at once instead of waiting on the watcher.
 fn touched(app: &App, paths: &[PathBuf]) {
     let mut s = app.scan.lock().unwrap();
@@ -756,6 +776,13 @@ async fn shelf_add(State(app): State<Shared>, Json(req): Json<PathsReq>) -> Json
             return Json(req.paths.into_iter().map(|key| Outcome { key, ok: false, error: Some("another move is already running".into()) }).collect());
         }
         for key in req.paths {
+            if let Some(cmd) = owner_cmd(&cands, key.trim_matches('/')) {
+                // shelving moves the files aside, which is what left Ollama listing models that
+                // were not there. There is no reversible half of `ollama rm`, so say so instead.
+                out.push(Outcome { key, ok: false, error: Some(format!("another tool owns this. Delete runs `{cmd}`, which cannot be shelved and put back; the weights would be pulled again.")) });
+                job_tick(&app);
+                continue;
+            }
             let r = target(&app, &key, &cands).map_err(|e| e.1).and_then(|(rel, abs, size, note)| match idle {
                 Some(cut) if abs.is_dir() => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, bytes)| shelf::shelve_partial(&abs, &files, bytes, format!("{note} · only files idle at the time")).map(|_| files.iter().map(|f| abs.join(f)).collect::<Vec<_>>()).map_err(|e| e.to_string())),
                 Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| if files.is_empty() { Err("not idle that long".into()) } else { shelf::shelve(&abs, size, note).map(|_| vec![abs]).map_err(|e| e.to_string()) }),
@@ -785,6 +812,15 @@ async fn delete_paths(State(app): State<Shared>, Json(req): Json<PathsReq>) -> J
             return Json(req.paths.into_iter().map(|key| Outcome { key, ok: false, error: Some("another move is already running".into()) }).collect());
         }
         for key in req.paths {
+            if let Some(cmd) = owner_cmd(&cands, key.trim_matches('/')) {
+                let abs = resolve(&app, &key).map(|(_, a)| a).ok();
+                match run_owner(&cmd) {
+                    Ok(()) => { gone.extend(abs); out.push(Outcome { key, ok: true, error: None }) }
+                    Err(e) => out.push(Outcome { key, ok: false, error: Some(e) }),
+                }
+                job_tick(&app);
+                continue;
+            }
             let r = target(&app, &key, &cands).map_err(|e| e.1).and_then(|(rel, abs, ..)| match idle {
                 Some(cut) => idle_files(&app, &rel, cut).map_err(|e| e.1).and_then(|(files, _)| {
                     if files.is_empty() { return Err("not idle that long".into()); }

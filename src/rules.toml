@@ -86,6 +86,8 @@ weight = 1.4
 dir = false
 parent_ends_with = ".ollama/models/blobs"
 min_size = "200 MB"
+# Ollama keeps its own index. Unlink a blob and `ollama ls` still lists the model, so let Ollama do it.
+remove_with = "ollama rm {name}"
 
 [[rule]]
 id = "hf-model"
