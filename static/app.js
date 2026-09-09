@@ -976,6 +976,9 @@ function fetchView(path) {
   return views.get(key);
 }
 let summaryData = null, idleFiles = null;
+// what the Cleanup panel last worked out is safe to free, so the post-scan banner cannot quote a
+// different figure: this one already drops hidden folders, switched-off tiers, and the note tier
+let cleanEasy = 0;
 let navToken = 0, navBusy = 0, lastInput = 0;
 const navHist = []; // folders you came from, newest last
 function goBack() { const p = navHist.pop(); if (p !== undefined) navigate(p, { back: true }); }
@@ -1299,6 +1302,7 @@ function renderCleanup() {
   const sum = (pred) => tierSums.filter((t) => pred(t) && tiersOn.has(t[0])).reduce((a, t) => a + t[1], 0);
   // `note` is inventory and never counts toward either headline, even when its pill is on
   const easy = sum((t) => t[0] === 'safe' || t[0] === 'likely'), review = sum((t) => t[0] === 'review');
+  cleanEasy = easy; // the one number for "safe to free": the banner after a scan says this too
   head.innerHTML = `<div class="big"></div><div class="scope"></div>`;
   head.querySelector('.big').innerHTML = easy ? `${fmt(easy)}<small>safe to free</small>` : review ? `${fmt(review)}<small>worth a look</small>` : `Nothing to clean<small>here</small>`;
   if (easy && review) head.querySelector('.big').insertAdjacentHTML('afterend', `<div class="plus">plus ${fmt(review)} worth a look</div>`);
@@ -1786,8 +1790,7 @@ async function finishScan() {
 }
 /** The moment the scan lands: headline counts up while the camera takes one quick turn around the rising map, then stops. */
 function reveal(st) {
-  const el = $('#reveal'), s = summaryData;
-  const easy = s ? s.tiers.filter((t) => t[0] !== 'review').reduce((a, t) => a + t[1], 0) : 0;
+  const el = $('#reveal'), easy = cleanEasy;
   el.classList.add('on');
   const t0 = performance.now(), dur = REDUCED ? 0 : 1400;
   const tick = (now) => {
