@@ -2573,9 +2573,12 @@ function ruContext() {
       for (const it of items) {
         const idleNote = it.cand?.full_size != null ? ` · of which ${fmt(it.cand.size)} untouched ${idleDays}+ days` : '';
         const head = `${absOf(it.path)}${it.is_dir ? '/' : ''} · ${fmt(it.cand?.full_size ?? it.size)}${idleNote}${it.node ? ` · ${it.is_dir ? fmtN(it.node.files) + ' files · ' : ''}${fmtAge(ageDays(it.node))}` : ''}${it.node?.types?.some(Boolean) ? ` · mostly ${TYPE_NAMES[dominant(it.node.types)]}` : ''}${it.cand ? `\n  Di flagged it: ${TIER_LABEL[it.cand.tier]} · ${it.cand.what}. ${it.cand.note}` : ''}`;
+        // Di's own reasoning about this very item, which Ru was never told before: without it Ru is
+        // asked to second-guess a verdict it cannot see
+        const why = it.cand ? `\n  Why Di flagged it: ${TIER_LABEL[it.cand.tier]} · ${it.cand.what}. ${it.cand.note} (rule: ${it.cand.reason})` : '\n  Di did not flag this one; the user picked it.';
         const kids = it.kids.slice(0, 12).map((c) => '  ' + kidLine(c)).join('\n');
         const fl = it.flagged.filter((c) => c.path !== it.path).slice(0, 12).map((c) => '  ' + candLine(c)).join('\n');
-        L.push(`### ${head}${kids ? `\n  Inside, biggest first:\n${kids}` : ''}${fl ? `\n  Di flagged inside it (${it.flagged.length} in all):\n${fl}` : ''}`);
+        L.push(`### ${head}${why}${kids ? `\n  Inside, biggest first:\n${kids}` : ''}${fl ? `\n  Di flagged inside it (${it.flagged.length} in all):\n${fl}` : ''}`);
       }
     }
   } else if (ru.area === 'shelf') {

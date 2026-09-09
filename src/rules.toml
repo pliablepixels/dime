@@ -25,6 +25,8 @@
 #                      a command will rebuild from an orphan whose project is gone
 #   min_size           "20 MB", "1 GB" or bytes; items under 1 MB are never listed
 #   min_age_days       untouched (no read or write) for at least this many days
+#   descend            true = this is a container, not a candidate: keep walking inside it. Without
+#                      this, a rule that names a folder hides every finer rule underneath it
 #
 # disable = ["downloads", "stale"]   # in your file: switch built-in ids off
 
@@ -57,14 +59,195 @@ name = ["node_modules", "target", ".venv", "venv", "__pycache__", ".gradle", ".n
         "Pods", ".next", ".turbo", ".tox", ".mypy_cache", ".pytest_cache", ".parcel-cache", ".nuxt",
         "DerivedData", ".cargo-cache", "bower_components", ".dart_tool", ".angular"]
 
+# Containers, named only so the walk carries on past them. A cache folder holding a dozen model
+# stores is not itself a thing anyone removes, and claiming it here would hide everything below.
+[[rule]]
+id = "container"
+tier = "note"
+what = "Container"
+note = ""
+descend = true
+dir = true
+name = ["huggingface", "lm-studio", "lmstudio", "torch", "uv", "pip", "hub", "models", "blobs", "manifests",
+        "nomic.ai", "jan", "GPT4All", "Ollama", "LM Studio", "datasets", "xet"]
+
+# ---- models and agents ----
+# Weights are the biggest thing on a developer's disk now, and they arrive in a dozen places. Each
+# store is broken into the unit people recognise: one model, not the whole cache. Ollama is the
+# exception, because it stores weights by content hash; DiMe reads its manifests and puts the model
+# name back on the row.
+
+[[rule]]
+id = "ollama-model"
+tier = "review"
+what = "Ollama models"
+note = "Pulled again on demand. {idle}"
+weight = 1.4
+dir = false
+parent_ends_with = ".ollama/models/blobs"
+min_size = "200 MB"
+
+[[rule]]
+id = "hf-model"
+tier = "review"
+what = "Hugging Face models"
+note = "Downloaded weights. Fetched again the next time something asks for them. {idle}"
+weight = 1.3
+dir = true
+parent_ends_with = "huggingface/hub"
+min_size = "50 MB"
+
+[[rule]]
+id = "hf-datasets"
+tier = "review"
+what = "Hugging Face datasets"
+note = "Downloaded datasets. Fetched again on demand. {idle}"
+weight = 1.3
+dir = true
+parent_ends_with = "huggingface/datasets"
+min_size = "50 MB"
+
+[[rule]]
+id = "lmstudio-model"
+tier = "review"
+what = "LM Studio models"
+note = "Downloaded weights. Re-downloadable from LM Studio. {idle}"
+weight = 1.3
+dir = true
+under = "lmstudio"
+parent_ends_with = "models"
+min_size = "50 MB"
+
+# Deliberately not .ollama or .lmstudio: those have rules above that break them into single models,
+# and naming the store here would stop the walk before it ever reached them.
+[[rule]]
+id = "models"
+tier = "review"
+what = "AI models"
+note = "Downloaded model weights. Pulled again automatically if you use them. {idle}"
+weight = 1.2
+dir = true
+name = ["mlx_models", "gguf"]
+min_size = "100 MB"
+
+# The rest of the field keeps weights in readable folders, so they only need naming here, not
+# decoding. Each is broken at the level of one model or one checkpoint.
+[[rule]]
+id = "gpt4all-model"
+tier = "review"
+what = "GPT4All models"
+note = "Downloaded weights. Re-downloadable in GPT4All. {idle}"
+weight = 1.3
+dir = false
+ext = ["gguf", "bin"]
+under = "nomic.ai"
+min_size = "200 MB"
+
+[[rule]]
+id = "jan-model"
+tier = "review"
+what = "Jan models"
+note = "Downloaded weights. Re-downloadable in Jan. {idle}"
+weight = 1.3
+dir = true
+parent_ends_with = "jan/models"
+min_size = "200 MB"
+
+[[rule]]
+id = "diffusion-model"
+tier = "review"
+what = "Image model checkpoints"
+note = "A checkpoint, LoRA or VAE for an image model. Big, and re-downloadable from where it came. {idle}"
+weight = 1.3
+dir = false
+ext = ["safetensors", "ckpt", "pt", "pth", "gguf"]
+min_size = "500 MB"
+
+[[rule]]
+id = "llamacpp-model"
+tier = "review"
+what = "llama.cpp models"
+note = "A GGUF weight file. {idle}"
+weight = 1.3
+dir = false
+ext = ["gguf"]
+min_size = "200 MB"
+
+[[rule]]
+id = "torch-cache"
+tier = "likely"
+what = "Model caches"
+note = "Weights and checkpoints a library downloaded for itself. Fetched again on demand. {idle}"
+weight = 1.5
+dir = true
+name = ["torch", "whisper", "mlx", "sentence_transformers", "transformers", "timm", "open_clip", "llama_index", "chroma", "onnx"]
+under = ".cache"
+min_size = "100 MB"
+
+[[rule]]
+id = "agent-sessions"
+tier = "likely"
+what = "Agent transcripts & logs"
+note = "What a coding agent recorded of past sessions. Deleting loses the history, nothing else. {idle}"
+weight = 1.6
+dir = true
+name = ["projects", "sessions", "file-history", "shell-snapshots", "logs", "history", "cache", "todos"]
+under = ".codex"
+min_size = "20 MB"
+
+[[rule]]
+id = "agent-sessions"
+tier = "likely"
+what = "Agent transcripts & logs"
+note = "What a coding agent recorded of past sessions. Deleting loses the history, nothing else. {idle}"
+weight = 1.6
+dir = true
+name = ["projects", "sessions", "file-history", "shell-snapshots", "logs", "history", "todos", "statsig"]
+under = ".claude"
+min_size = "20 MB"
+
+[[rule]]
+id = "browser-bundles"
+tier = "likely"
+what = "Headless browsers"
+note = "Browsers a test runner downloaded for itself. Re-downloaded on demand. {idle}"
+weight = 1.6
+dir = true
+name = ["ms-playwright", "ms-playwright-go", "puppeteer", "Chromium", "chrome"]
+under = "Caches"
+min_size = "100 MB"
+
+# A cache folder is a container: one per app inside it, and that is the unit worth showing. Naming
+# the container instead would stop the walk before it reached any of the rules above.
+[[rule]]
+id = "appcache"
+tier = "safe"
+what = "App caches"
+note = "One app's cache. It rebuilds what it needs, and may start slower once. {idle}"
+weight = 2.5
+dir = true
+parent_ends_with = "Caches"
+min_size = "20 MB"
+
+[[rule]]
+id = "appcache"
+tier = "safe"
+what = "App caches"
+note = "One app's cache. It rebuilds what it needs, and may start slower once. {idle}"
+weight = 2.5
+dir = true
+parent_ends_with = ".cache"
+min_size = "20 MB"
+
 [[rule]]
 id = "appcache"
 tier = "safe"
 what = "App caches"
 note = "Apps rebuild this as needed. Some may start slower once."
-weight = 2.5
+weight = 2.4
 dir = true
-name = ["Caches", ".cache", "CachedData", "Code Cache", "GPUCache", "Cache", "ShaderCache"]
+name = ["CachedData", "Code Cache", "GPUCache", "ShaderCache"]
+min_size = "20 MB"
 
 # The two rules below match the *children* of a folder rather than the folder itself, because that is
 # where the removable thing lives: one OS version, one simulator. Flagging the folder holding them
@@ -105,23 +288,13 @@ dir = true
 name = [".Trash"]
 
 [[rule]]
-id = "models"
-tier = "review"
-what = "AI models"
-note = "Downloaded model weights. Pulled again automatically if you use them."
-weight = 1.2
+id = "trash"
+tier = "safe"
+what = "Already in the Trash"
+note = "Empty the Trash to get this space back."
+weight = 3.0
 dir = true
-name = [".ollama", ".lmstudio"]
-
-[[rule]]
-id = "models"
-tier = "review"
-what = "AI models"
-note = "Downloaded model weights. Pulled again automatically if you use them."
-weight = 1.2
-dir = true
-name = ["hub"]
-parent_ends_with = "huggingface"
+name = [".Trash"]
 
 [[rule]]
 id = "backups"

@@ -37,6 +37,10 @@ pub struct Rule {
     pub min_size: u64,
     #[serde(default)]
     pub min_age_days: i64,
+    /// This is a container, not a thing to remove: match it only to say "keep looking inside".
+    /// Without it, naming a folder stops the walk there and every finer rule below is unreachable.
+    #[serde(default)]
+    pub descend: bool,
 }
 fn one() -> f64 {
     1.0

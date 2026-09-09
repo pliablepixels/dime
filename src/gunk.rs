@@ -60,12 +60,61 @@ fn rank(tier: &str) -> usize {
 fn ext(name: &str) -> String {
     name.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
 }
+/// Sizes the way people say them, for notes that quote a total.
+fn human(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let (mut v, mut i) = (b as f64, 0);
+    while v >= 1024.0 && i < 4 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{b} B") } else if v < 10.0 { format!("{v:.1} {}", U[i]) } else { format!("{v:.0} {}", U[i]) }
+}
 fn months(days: i64) -> String {
     if days < 60 { format!("{days} days") } else if days < 730 { format!("{} months", days / 30) } else { format!("{:.1} years", days as f64 / 365.0) }
 }
 
 /// All candidates in the tree, best first. Compute once per tree version; filter by prefix per request.
 /// Rules are re-read each time, so edits to ~/.dime/rules.toml show up on the next rescan.
+/// Ollama stores weights by content hash, so the map shows anonymous sha256 blobs where people
+/// expect model names. Its manifests hold the mapping: one file per model:tag, listing the layers
+/// it is made of. Returns blob path -> (model name, size of the whole model).
+fn ollama_models(store: &Path) -> HashMap<PathBuf, (String, u64)> {
+    let (manifests, blobs) = (store.join("manifests"), store.join("blobs"));
+    let mut out = HashMap::new();
+    let mut stack = vec![manifests.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            // .../manifests/<registry>/<namespace>/<name>/<tag> reads back as name:tag
+            let rel = p.strip_prefix(&manifests).unwrap_or(&p);
+            let parts: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let model = format!("{}:{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let layers = json["layers"].as_array().cloned().unwrap_or_default();
+            let paths: Vec<PathBuf> = layers
+                .iter()
+                .filter_map(|l| l["digest"].as_str())
+                .map(|d| blobs.join(d.replace(':', "-")))
+                .collect();
+            let total: u64 = paths.iter().filter_map(|b| std::fs::symlink_metadata(b).ok()).map(|m| m.len()).sum();
+            for b in paths {
+                out.insert(b, (model.clone(), total));
+            }
+        }
+    }
+    out
+}
+
 /// Every regular file a running process has open, as absolute paths. One lsof sweep for the whole
 /// machine, cached briefly because find_all runs again on every tree change.
 fn open_paths() -> Vec<String> {
@@ -120,8 +169,52 @@ pub fn find_all(base: &Path, root: &Node) -> Vec<Candidate> {
     let open = if cfg.open_tier.is_some() { open_paths() } else { vec![] };
     let mut w = Walk { now, rules: cfg.rules, open_tier: cfg.open_tier, open, base: base.to_path_buf(), writable: HashMap::new(), out: vec![], seen: HashMap::new() };
     walk(&mut w, root, "");
+    name_stores(base, &mut w.out);
     w.out.sort_by(|a, b| b.score.total_cmp(&a.score));
     w.out
+}
+
+/// Every store keeps its weights differently, and most of them hide the name people know the model
+/// by. This is where DiMe puts it back: Ollama addresses blobs by hash, Hugging Face mangles
+/// org/name into a folder, and the rest are readable enough to leave alone. Rules decide what gets
+/// flagged and at what tier; this only improves how it reads.
+fn name_stores(base: &Path, out: &mut [Candidate]) {
+    name_ollama(base, out);
+    name_huggingface(out);
+}
+
+/// `models--Salesforce--SFR-Embedding-Mistral` is how the hub spells `Salesforce/SFR-Embedding-Mistral`.
+fn name_huggingface(out: &mut [Candidate]) {
+    for c in out.iter_mut().filter(|c| c.reason == "hf-model" || c.reason == "hf-datasets") {
+        let Some(rest) = c.name.strip_prefix("models--").or_else(|| c.name.strip_prefix("datasets--")) else { continue };
+        let pretty = rest.replace("--", "/");
+        c.note = format!("{pretty}, as the hub stores it. `huggingface-cli delete-cache` removes it tidily. {}", c.note);
+        c.name = pretty;
+    }
+}
+
+/// Put model names back on Ollama's content-addressed blobs, once, after the walk.
+fn name_ollama(base: &Path, out: &mut [Candidate]) {
+    let stores: Vec<PathBuf> = out
+        .iter()
+        .filter(|c| c.reason == "ollama-model")
+        .filter_map(|c| base.join(&c.path).parent().and_then(|p| p.parent()).map(Path::to_path_buf))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    if stores.is_empty() {
+        return;
+    }
+    let mut map = HashMap::new();
+    for s in stores {
+        map.extend(ollama_models(&s));
+    }
+    for c in out.iter_mut().filter(|c| c.reason == "ollama-model") {
+        if let Some((model, total)) = map.get(&base.join(&c.path)) {
+            c.name = model.clone();
+            c.note = format!("The weights of {model}, {} in all. Remove it cleanly with `ollama rm {model}`, or shelve this and put it back later. {}", human(*total), c.note);
+        }
+    }
 }
 
 pub fn under<'a>(all: &'a [Candidate], prefix: &str) -> impl Iterator<Item = &'a Candidate> + 'a {
@@ -177,7 +270,7 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             let key = (c.size, c.name.clone());
             if let Some((other, other_m)) = w.seen.get(&key).cloned() {
                 if other_m >= c.mtime {
-                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0 };
+                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: None, has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false };
                     w.out.push(mk(&dup, format!("Same name and size as {other}.")));
                     continue;
                 }
@@ -190,7 +283,15 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
         // checked before the rule lookup so the two borrows of `w` never overlap; an item we cannot
         // remove still gets walked into, since something deeper may sit in a folder we do own
         let can_remove = removable(w, path);
-        if let Some(r) = w.rules.iter().filter(|_| can_remove).find(|r| r.matches(&it)) {
+        let hit = w.rules.iter().filter(|_| can_remove).find(|r| r.matches(&it));
+        if hit.is_some_and(|r| r.descend) {
+            // a container: named only so the walk knows to carry on past it
+            if c.is_dir {
+                walk(w, c, &p);
+            }
+            continue;
+        }
+        if let Some(r) = hit {
             let idle = if age_known { format!("Idle {}.", months(age)) } else { "Age unknown.".into() };
             let note = r.note.replace("{idle}", &idle).replace("{age}", &if age_known { months(age) } else { "an unknown time".into() });
             let mut cand = mk(r, note);
