@@ -1,0 +1,41 @@
+name: CI
+
+# macOS only, because DiMe is: it leans on FSEvents, getattrlistbulk, lsof, nettop and IOKit, so a
+# Linux runner would not compile it, let alone exercise it.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Warnings are errors here on purpose. The tree is clean today, and the only way it stays
+      # clean is if the first new one fails a build rather than scrolling past someone.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
+
+      - name: Release build
+        run: cargo build --release
+
+      # The largest file in the repo has no linter. A parse is not much, but it is the difference
+      # between a typo shipping and a typo failing here.
+      - name: Frontend parses
+        run: node --check static/app.js
+
+      # The rules are data, and a broken rules.toml would otherwise only show up at runtime, where
+      # it is reported on stderr and ignored. The test suite parses the built-ins; this catches a
+      # file that does not even parse as TOML.
+      - name: Rules parse
+        run: python3 -c "import tomllib; tomllib.load(open('src/rules.toml','rb'))"

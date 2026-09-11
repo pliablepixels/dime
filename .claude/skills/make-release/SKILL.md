@@ -14,11 +14,40 @@ publish. This skill is the half that needs judgement: which version, and what th
 git status --porcelain          # must be empty
 git rev-parse --abbrev-ref HEAD # master
 git log origin/master..HEAD     # must be empty: release from what is pushed
-cargo test --release && cargo build --release 2>&1 | grep -c warning
 ```
 
-Stop and say so if the tree is dirty, the branch is not master, tests fail, or the build
-warns. Do not release around a failure.
+Then run every gate CI runs, in the same form, and read each result rather than the exit
+code of the chain:
+
+```sh
+cargo clippy --all-targets -- -D warnings   # the tree is clean; keep it that way
+cargo test --release
+cargo build --release
+node --check static/app.js                  # see below: nothing else ever parses it
+python3 -c "import tomllib; tomllib.load(open('src/rules.toml','rb'))"
+```
+
+`static/app.js` is 3,000 lines and reaches the binary through `include_bytes!`, so the
+Rust build embeds it without ever parsing it. A syntax error there compiles, tests green,
+signs, uploads, and ships a blank window. `node --check` is the only thing between that
+and a release. The same goes for `rules.toml`: the test suite parses the built-ins, so
+this is belt and braces, but it costs nothing.
+
+Do not count warnings with `grep -c`. It exits 1 when it finds none, so a clean build
+reads as a failure and a warning-laden one reads as success, which is exactly backwards.
+Read the build output instead.
+
+Then confirm CI agreed, on the commit being released:
+
+```sh
+gh run list --branch master --limit 1 --json headSha,conclusion,workflowName
+git rev-parse HEAD                          # must match headSha above
+```
+
+Stop and say so if the tree is dirty, the branch is not master, anything is unpushed, any
+gate fails, or CI has not passed on this exact commit. Do not release around a failure,
+and do not release ahead of CI: a green run on an older commit says nothing about this
+one.
 
 ## 2. Decide the version
 
@@ -73,15 +102,26 @@ Wait for the user's go-ahead before publishing.
 make release V=<version> NOTES=dist/notes-v<version>.md
 ```
 
-That bumps `Cargo.toml`, commits, tags, pushes master and the tag, builds the universal
-binary and the signed-ad-hoc app bundle, and creates the GitHub release with both
-artifacts attached. The body is the summary followed by GitHub's own generated changelog;
-without `NOTES` it is the changelog alone, which is not what this skill is for.
+It runs in the order that keeps mistakes local. First the gates from step 1 again, since
+`make release` has to be safe on its own; then the version bump and both builds, which is
+where `lipo` and `codesign` get their chance to fail; and only then does it commit, tag,
+push master and the tag, and create the GitHub release with both artifacts attached. The
+body is the summary followed by GitHub's own generated changelog; without `NOTES` it is
+the changelog alone, which is not what this skill is for.
 
-If it fails partway, find out how far it got before retrying: the tag and the push may
-already exist (`git tag -d` and `git push --delete origin <tag>` undo them), and
-`gh release delete` removes a half-made release. `make release` refuses to start on a
-dirty tree or an existing tag, so clean up rather than force.
+Nothing leaves the machine until every test has passed and both artifacts exist. That
+matters because a pushed tag is public immediately, and a public tag for a release that
+does not exist is the one failure here that cannot be quietly undone.
+
+So a failure before the tag leaves nothing to clean up: the version bump puts itself back
+and you fix the cause and run it again. A failure after the tag is only `gh release
+create`, and the artifacts are already built, so rerunning that one command finishes the
+job.
+
+If it somehow fails between the push and the release, `git tag -d` and `git push --delete
+origin <tag>` undo the tag and `gh release delete` removes a half-made release. `make
+release` refuses to start on a dirty tree or an existing tag, so clean up rather than
+force.
 
 ## 5. Verify, then report
 
