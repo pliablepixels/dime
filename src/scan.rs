@@ -4,6 +4,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Node {
@@ -13,6 +14,10 @@ pub struct Node {
     pub atime: i64,
     pub is_dir: bool,
     pub files: u64,
+    /// This file has more than one hard link, so its bytes are counted at every path that shares
+    /// them and removing one of those paths frees nothing. pnpm, uv and bun all link a central
+    /// store into every project; Homebrew does the same. False for folders.
+    pub shared: bool,
     #[serde(skip)]
     pub children: Vec<Node>,
 }
@@ -106,13 +111,72 @@ fn privacy_refusal(e: &std::io::Error) -> bool {
     e.raw_os_error() == Some(libc::EPERM)
 }
 
-/// Folders a scan never enters: system mounts under "/", and DiMe's own shelf (moving something there must not just move it on the map).
-pub fn skip_list(root: &Path) -> Vec<PathBuf> {
+/// Folders the user told Di to stay out of, kept as absolute paths in ~/.dime/skip.json. Global
+/// rather than per-root, because a folder you do not want walked is one you do not want walked
+/// whichever direction the scan arrives from.
+///
+/// Held in memory with the timestamp it was read at, because this is asked on every scan and again
+/// on every watcher event. Editing the file by hand takes effect the same way editing rules.toml
+/// does: one `stat` per ask is what that costs, against a parse that would otherwise repeat.
+static SKIP: Mutex<Option<(i64, Vec<PathBuf>)>> = Mutex::new(None);
+
+pub fn skip_file() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())).join(".dime").join("skip.json")
+}
+
+/// The list as the file has it, re-read whenever the file's timestamp moves. Takes the path rather
+/// than looking it up so the behaviour can be exercised without a process-wide HOME.
+fn load_skipped(f: &Path) -> Vec<PathBuf> {
+    let stamp = fs::symlink_metadata(f).map(|m| m.mtime()).unwrap_or(0);
+    let mut g = SKIP.lock().unwrap();
+    if g.as_ref().is_none_or(|(at, _)| *at != stamp) {
+        let v = fs::read(f)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        *g = Some((stamp, v));
+    }
+    g.as_ref().unwrap().1.clone()
+}
+
+pub fn skipped() -> Vec<PathBuf> {
+    load_skipped(&skip_file())
+}
+
+/// Replace the list. Written whole, so removing an entry is the same call as adding one.
+fn write_skipped(f: &Path, v: &[PathBuf]) -> std::io::Result<()> {
+    fs::create_dir_all(f.parent().unwrap())?;
+    let tmp = f.with_extension("json.tmp");
+    let text: Vec<String> = v.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    fs::write(&tmp, serde_json::to_vec_pretty(&text)?)?;
+    fs::rename(&tmp, f)?;
+    let stamp = fs::symlink_metadata(f).map(|m| m.mtime()).unwrap_or(0);
+    *SKIP.lock().unwrap() = Some((stamp, v.to_vec()));
+    Ok(())
+}
+
+pub fn set_skipped(v: &[PathBuf]) -> std::io::Result<()> {
+    write_skipped(&skip_file(), v)
+}
+
+/// Folders a scan never enters: system mounts under "/", DiMe's own shelf (moving something there
+/// must not just move it on the map), and whatever the user has told it to leave alone.
+///
+/// Split from `skip_list` so the composition can be checked without a process-wide HOME: what the
+/// walk is handed is the whole point, and a user exclusion that never reaches it is decoration.
+fn compose_skips(root: &Path, user: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut skip: Vec<PathBuf> = if root == Path::new("/") { ["/dev", "/Volumes", "/System/Volumes", "/private/var/vm", "/proc"].iter().map(PathBuf::from).collect() } else { vec![] };
     if let Ok(h) = std::env::var("HOME") {
         skip.push(PathBuf::from(h).join(".dime"));
     }
+    skip.extend(user);
     skip
+}
+pub fn skip_list(root: &Path) -> Vec<PathBuf> {
+    compose_skips(root, skipped())
 }
 pub fn scan(root: &Path, progress: &Progress) -> Node {
     DENIED.store(0, Ordering::Relaxed);
@@ -153,7 +217,7 @@ pub fn scan(root: &Path, progress: &Progress) -> Node {
         mtime = mtime.max(c.mtime);
         atime = atime.max(c.atime);
     }
-    Node { name: name_of(root), size, mtime, atime, is_dir: true, files, children }
+    Node { name: name_of(root), size, mtime, atime, is_dir: true, files, shared: false, children }
 }
 
 fn file_node(p: &Path, md: &fs::Metadata) -> Node {
@@ -164,6 +228,7 @@ fn file_node(p: &Path, md: &fs::Metadata) -> Node {
         atime: md.atime(),
         is_dir: false,
         files: 1,
+        shared: md.nlink() > 1,
         children: vec![],
     }
 }
@@ -176,6 +241,7 @@ struct Ent {
     mtime: i64,
     atime: i64,
     dev: u64,
+    links: u32,
 }
 /// Read a whole directory with macOS's bulk attribute call: name, type, times, allocated size and device for every entry,
 /// a few hundred entries per syscall. Errors fall back to the readdir + lstat walk.
@@ -189,7 +255,7 @@ fn bulk_entries(path: &Path) -> std::io::Result<Vec<Ent>> {
     let mut al: libc::attrlist = unsafe { std::mem::zeroed() };
     al.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
     al.commonattr = libc::ATTR_CMN_RETURNED_ATTRS | libc::ATTR_CMN_NAME | libc::ATTR_CMN_DEVID | libc::ATTR_CMN_OBJTYPE | libc::ATTR_CMN_MODTIME | libc::ATTR_CMN_ACCTIME;
-    al.fileattr = libc::ATTR_FILE_ALLOCSIZE;
+    al.fileattr = libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE;
     thread_local! { static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 128 * 1024]); } // one buffer per rayon thread, never re-zeroed
     let mut out = Vec::new();
     BUF.with(|b| -> std::io::Result<()> {
@@ -211,30 +277,33 @@ fn bulk_entries(path: &Path) -> std::io::Result<Vec<Ent>> {
         let mut off = 0usize;
         for _ in 0..n {
             let start = off;
-            let len = rd32(&buf, off) as usize;
+            let len = rd32(buf, off) as usize;
             let mut p = off + 4;
             // returned attribute set: which of the requested attributes are actually present (5 x u32)
-            let ret_common = rd32(&buf, p);
-            let ret_file = rd32(&buf, p + 12); // attribute_set_t: common, vol, dir, file, fork
+            let ret_common = rd32(buf, p);
+            let ret_file = rd32(buf, p + 12); // attribute_set_t: common, vol, dir, file, fork
             p += 20;
             let mut name = String::new();
             if ret_common & libc::ATTR_CMN_NAME != 0 {
-                let (ro, rl) = (rd32(&buf, p) as i32 as isize, rd32(&buf, p + 4) as usize);
+                let (ro, rl) = (rd32(buf, p) as i32 as isize, rd32(buf, p + 4) as usize);
                 let s = (p as isize + ro) as usize;
                 name = String::from_utf8_lossy(&buf[s..s + rl.saturating_sub(1)]).into_owned();
                 p += 8;
             }
             let mut dev = 0;
-            if ret_common & libc::ATTR_CMN_DEVID != 0 { dev = rd32(&buf, p) as u64; p += 4; }
+            if ret_common & libc::ATTR_CMN_DEVID != 0 { dev = rd32(buf, p) as u64; p += 4; }
             let mut kind = 0;
-            if ret_common & libc::ATTR_CMN_OBJTYPE != 0 { kind = rd32(&buf, p); p += 4; }
+            if ret_common & libc::ATTR_CMN_OBJTYPE != 0 { kind = rd32(buf, p); p += 4; }
             let mut mtime = 0;
-            if ret_common & libc::ATTR_CMN_MODTIME != 0 { mtime = rd64(&buf, p) as i64; p += 16; }
+            if ret_common & libc::ATTR_CMN_MODTIME != 0 { mtime = rd64(buf, p) as i64; p += 16; }
             let mut atime = 0;
-            if ret_common & libc::ATTR_CMN_ACCTIME != 0 { atime = rd64(&buf, p) as i64; p += 16; }
+            if ret_common & libc::ATTR_CMN_ACCTIME != 0 { atime = rd64(buf, p) as i64; p += 16; }
+            // file attributes arrive in bit order, and LINKCOUNT (0x1) sits before ALLOCSIZE (0x4)
+            let mut links = 1;
+            if ret_file & libc::ATTR_FILE_LINKCOUNT != 0 { links = rd32(buf, p); p += 4; }
             let mut size = 0;
-            if ret_file & libc::ATTR_FILE_ALLOCSIZE != 0 { size = rd64(&buf, p); }
-            out.push(Ent { name, kind, size, mtime, atime, dev });
+            if ret_file & libc::ATTR_FILE_ALLOCSIZE != 0 { size = rd64(buf, p); }
+            out.push(Ent { name, kind, size, mtime, atime, dev, links });
             off = start + len;
         }
     }
@@ -246,7 +315,7 @@ fn bulk_entries(path: &Path) -> std::io::Result<Vec<Ent>> {
 
 fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[AtomicU64; 10], dev: u64, skip: &[PathBuf]) -> Node {
     if STOP.load(Ordering::Relaxed) {
-        return Node { name: name_of(path), size: 0, mtime: 0, atime: 0, is_dir: true, files: 0, children: vec![] };
+        return Node { name: name_of(path), size: 0, mtime: 0, atime: 0, is_dir: true, files: 0, shared: false, children: vec![] };
     }
     if std::env::var_os("DIME_SLOW_SCAN").is_some() { return scan_dir_slow(path, bytes, counter, types, dev, skip); }
     let Ok(ents) = bulk_entries(path) else { return scan_dir_slow(path, bytes, counter, types, dev, skip) };
@@ -261,7 +330,7 @@ fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[Atomic
                 counter.fetch_add(1, Ordering::Relaxed);
                 bytes.fetch_add(e.size, Ordering::Relaxed);
                 types[type_of(&e.name)].fetch_add(e.size, Ordering::Relaxed);
-                children.push(Node { name: e.name, size: e.size, mtime: e.mtime, atime: e.atime, is_dir: false, files: 1, children: vec![] });
+                children.push(Node { name: e.name, size: e.size, mtime: e.mtime, atime: e.atime, is_dir: false, files: 1, shared: e.links > 1, children: vec![] });
             }
             _ => {} // symlinks, sockets, devices
         }
@@ -281,13 +350,13 @@ fn scan_dir(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[Atomic
         mtime = mtime.max(c.mtime);
         atime = atime.max(c.atime);
     }
-    Node { name: name_of(path), size, mtime, atime, is_dir: true, files, children }
+    Node { name: name_of(path), size, mtime, atime, is_dir: true, files, shared: false, children }
 }
 
 /// The portable walk: readdir plus one lstat per entry. Used when the bulk call is refused (some network and FUSE volumes).
 fn scan_dir_slow(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[AtomicU64; 10], dev: u64, skip: &[PathBuf]) -> Node {
     if STOP.load(Ordering::Relaxed) {
-        return Node { name: name_of(path), size: 0, mtime: 0, atime: 0, is_dir: true, files: 0, children: vec![] };
+        return Node { name: name_of(path), size: 0, mtime: 0, atime: 0, is_dir: true, files: 0, shared: false, children: vec![] };
     }
     let own = fs::symlink_metadata(path).ok();
     let (mut mtime, mut atime) = own.as_ref().map(|m| (m.mtime(), m.atime())).unwrap_or((0, 0));
@@ -332,7 +401,7 @@ fn scan_dir_slow(path: &Path, bytes: &AtomicU64, counter: &AtomicU64, types: &[A
         mtime = mtime.max(c.mtime);
         atime = atime.max(c.atime);
     }
-    Node { name: name_of(path), size, mtime, atime, is_dir: true, files, children }
+    Node { name: name_of(path), size, mtime, atime, is_dir: true, files, shared: false, children }
 }
 
 pub fn get<'a>(root: &'a Node, rel: &str) -> Option<&'a Node> {
@@ -538,8 +607,8 @@ pub fn subtree(n: &Node, path: &str, depth: u32, cutoff: Option<i64>) -> Out {
         .take(MAX_CHILDREN)
         .map(|c| {
             let o = subtree(c, &join(path, &c.name), depth - 1, cutoff);
-            for i in 0..10 {
-                types[i] += o.types[i];
+            for (t, add) in types.iter_mut().zip(o.types) {
+                *t += add;
             }
             idle += o.idle_size.unwrap_or(0);
             o
@@ -561,7 +630,7 @@ pub fn subtree(n: &Node, path: &str, depth: u32, cutoff: Option<i64>) -> Out {
         }
         idle += ri;
         children.push(Out {
-            node: Node { name: format!("… {} more", rest.len()), size: rest.iter().map(|c| c.size).sum(), mtime: 0, atime: 0, is_dir: false, files: rest.iter().map(|c| c.files).sum(), children: vec![] },
+            node: Node { name: format!("… {} more", rest.len()), size: rest.iter().map(|c| c.size).sum(), mtime: 0, atime: 0, is_dir: false, files: rest.iter().map(|c| c.files).sum(), shared: false, children: vec![] },
             path: String::new(),
             types: rt,
             idle_size: cutoff.map(|_| ri),
@@ -584,9 +653,55 @@ pub fn join(a: &str, b: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStrExt;
 
     /// The whole point of the Full Disk Access banner: only macOS's own refusals are worth showing,
     /// because those are the ones the user can do something about.
+    /// The exclusion list only matters if it reaches `skip_list`, and it has to pick up a hand edit
+    /// the way rules.toml does rather than holding the first read for the life of the process.
+    #[test]
+    fn exclusions_reach_the_walk_and_reload() {
+        let dir = std::env::temp_dir().join(format!("dime-skip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("skip.json");
+        let keep_out = dir.join("noscan");
+        fs::create_dir_all(&keep_out).unwrap();
+
+        assert!(load_skipped(&f).is_empty(), "no file yet means nothing excluded");
+        write_skipped(&f, std::slice::from_ref(&keep_out)).unwrap();
+        assert_eq!(load_skipped(&f), vec![keep_out.clone()]);
+
+        // edited by hand, exactly like rules.toml: read back without a restart
+        fs::write(&f, br#"["/tmp"]"#).unwrap();
+        set_mtime(&f, 1_000_000_100); // the cache keys on mtime, and two writes can share one second
+        assert_eq!(load_skipped(&f), vec![PathBuf::from("/tmp")]);
+
+        // garbage is not a reason to stop scanning everything
+        fs::write(&f, b"not json at all").unwrap();
+        set_mtime(&f, 1_000_000_200);
+        assert!(load_skipped(&f).is_empty());
+
+        // and what the walk is actually handed: the user's list, plus DiMe's own shelf
+        let list = compose_skips(&dir, vec![keep_out.clone()]);
+        assert!(list.contains(&keep_out), "an exclusion the walk never sees is decoration");
+        assert!(list.iter().any(|p| p.ends_with(".dime")), "the shelf still keeps itself out");
+        // and the system mounts, only when the whole disk is the root
+        assert!(compose_skips(Path::new("/"), vec![]).contains(&PathBuf::from("/Volumes")));
+        assert!(!compose_skips(&dir, vec![]).contains(&PathBuf::from("/Volumes")));
+
+        write_skipped(&f, &[]).unwrap();
+        assert!(load_skipped(&f).is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    /// An explicit stamp, not an increment: two writes a moment apart share a second, and so would
+    /// two increments of it, which is the collision this is here to avoid.
+    fn set_mtime(p: &Path, secs: i64) {
+        let t = libc::timeval { tv_sec: secs, tv_usec: 0 };
+        let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        unsafe { libc::utimes(c.as_ptr(), [t, t].as_ptr()) };
+    }
+
     #[test]
     fn only_privacy_refusals_count() {
         let perm = std::io::Error::from_raw_os_error(libc::EPERM); // macOS privacy: "Operation not permitted"

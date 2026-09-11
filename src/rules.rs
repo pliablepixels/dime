@@ -22,7 +22,11 @@ pub struct Rule {
     pub name: Vec<String>,
     #[serde(default)]
     pub ext: Vec<String>,
-    pub parent_ends_with: Option<String>,
+    /// The folder holding it ends with one of these. A list for the same reason `under` is one:
+    /// the same rule usually covers several folders laid out alike, and saying so should not mean
+    /// copying the rule out once per folder.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub parent_ends_with: Vec<String>,
     /// Any of these as an ancestor folder's name. A list, because one rule usually covers several
     /// tools laid out the same way, and teaching DiMe a new one should be adding a word.
     #[serde(default, deserialize_with = "one_or_many")]
@@ -52,6 +56,16 @@ pub struct Rule {
     /// A command still holding a placeholder DiMe could not fill is never run.
     /// It runs as you, from a file only you can write, so it can run anything you can.
     pub remove_with: Option<String>,
+    /// Only match when the project itself says this folder is derived, i.e. git ignores it. A
+    /// `dist` in .gitignore is written again by the next build; a `dist` that is committed is what
+    /// somebody ships. Outside a git repo there is no such signal and the matcher stands aside.
+    /// One of the disk checks: see `DiskCheck` and `Rule::disk_checks`.
+    #[serde(default)]
+    pub git_ignored: bool,
+    /// Only match when the folder is named for an application bundle that is no longer installed:
+    /// what an uninstall left behind. The other disk check.
+    #[serde(default)]
+    pub app_gone: bool,
     /// This is a container, not a thing to remove: match it only to say "keep looking inside".
     /// Without it, naming a folder stops the walk there and every finer rule below is unreachable.
     #[serde(default)]
@@ -134,12 +148,36 @@ pub struct Item<'a> {
     pub siblings: &'a [String],
 }
 
+/// A matcher that reads the filesystem rather than the scanned tree, and so cannot be answered by
+/// `Rule::matches`: `Item` is built from the tree, and these need to open files beside the item or
+/// look at what is installed on the machine. `gunk::walk` asks them after a rule matches, and a
+/// rule that fails one was never a candidate at all.
+///
+/// Teaching DiMe a third is three edits, all named here: a `bool` field above, a variant here, and
+/// the arm that answers it in `gunk::walk`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DiskCheck {
+    /// git considers this folder derived output rather than something the project tracks
+    GitIgnored,
+    /// no application installed on this machine publishes this bundle identifier
+    AppGone,
+}
+
 impl Rule {
+    /// What this rule wants asked of the disk once `matches` has said yes. Every one must hold.
+    pub fn disk_checks(&self) -> impl Iterator<Item = DiskCheck> + '_ {
+        [(self.git_ignored, DiskCheck::GitIgnored), (self.app_gone, DiskCheck::AppGone)]
+            .into_iter()
+            .filter_map(|(want, c)| want.then_some(c))
+    }
+
+    /// Everything that can be decided from the scanned tree alone. The disk-backed half of the
+    /// contract lives in `disk_checks`, so a rule is matched only when both agree.
     pub fn matches(&self, it: &Item) -> bool {
         self.dir.is_none_or(|d| d == it.is_dir)
             && (self.name.is_empty() || self.name.iter().any(|n| n == it.name))
             && (self.ext.is_empty() || self.ext.iter().any(|e| e == it.ext))
-            && self.parent_ends_with.as_deref().is_none_or(|p| it.parent.ends_with(p))
+            && (self.parent_ends_with.is_empty() || self.parent_ends_with.iter().any(|p| it.parent.ends_with(p)))
             && (self.under.is_empty() || it.parent.split('/').any(|s| self.under.iter().any(|u| u == s)))
             && (self.has_child.is_empty() || it.children.iter().any(|c| self.has_child.contains(c)))
             && (self.has_sibling.is_empty() || it.siblings.iter().any(|c| self.has_sibling.contains(c)))
@@ -198,14 +236,14 @@ mod tests {
     #[test]
     fn builtin_and_user_rules() {
         let b = merge("").unwrap().rules;
-        assert_eq!(b[0].id, "orphan-cache"); // the more specific cache rule is tried first
+        assert_eq!(b[0].id, "venv-nolock"); // the most specific cache rule is tried first
         assert!(b.iter().any(|r| r.id == "downloads"));
         let nm = Item { siblings: &["package.json".into()], ..item("node_modules", true, 5 << 20, 0, "proj") };
         assert_eq!(b.iter().find(|r| r.matches(&nm)).unwrap().id, "cache");
         let dl = item("x.bin", false, 5 << 20, 40, "Downloads/sub");
         assert_eq!(b.iter().find(|r| r.matches(&dl)).unwrap().id, "downloads");
         let recent = item("x.bin", false, 5 << 20, 3, "Downloads");
-        assert!(b.iter().find(|r| r.matches(&recent)).is_none());
+        assert!(!b.iter().any(|r| r.matches(&recent)));
 
         let user = r#"
 disable = ["downloads"]
@@ -227,7 +265,7 @@ min_size = "1 MB"
         // a rule with parent_ends_with and no name flags each child, and leaves the folder holding
         // them unmatched so the walk keeps going: that is what stops a 34 GB all-or-nothing row
         let holder = item("iOS DeviceSupport", true, 34 << 30, 400, "Library/Developer/Xcode");
-        assert!(b.iter().find(|r| r.matches(&holder)).is_none(), "the folder itself must stay unflagged");
+        assert!(!b.iter().any(|r| r.matches(&holder)), "the folder itself must stay unflagged");
         let version = item("iPhone15,2 17.3 (21D50)", true, 6 << 30, 400, "Library/Developer/Xcode/iOS DeviceSupport");
         assert_eq!(b.iter().find(|r| r.matches(&version)).unwrap().id, "devicesupport");
         let sim = item("AAAA-1111", true, 3 << 30, 400, "Library/Developer/CoreSimulator/Devices");
@@ -248,11 +286,39 @@ min_size = "1 MB"
         let dated = item("thing.dmg", false, 8 << 30, 20_000, "Library/Developer/CoreDevice");
         assert_eq!(b.iter().find(|r| r.matches(&dated)).unwrap().id, "installer");
 
+        // A virtualenv is the one cache that can hold work nothing recorded. With a manifest beside
+        // it, one command puts it back and it is safe; without one, nothing on disk says what is
+        // installed, so it must not read as safe however much it looks like every other cache.
+        let venv = |sibs: &'static [String]| Item { siblings: sibs, ..item(".venv", true, 200 << 20, 100, "proj") };
+        let locked = venv(Box::leak(Box::new(["pyproject.toml".to_string()])));
+        assert_eq!(b.iter().find(|r| r.matches(&locked)).unwrap().id, "cache");
+        assert_eq!(b.iter().find(|r| r.matches(&locked)).unwrap().tier, "safe");
+        let loose = venv(Box::leak(Box::new(["README.md".to_string()])));
+        assert_eq!(b.iter().find(|r| r.matches(&loose)).unwrap().id, "venv-nolock");
+        assert_eq!(b.iter().find(|r| r.matches(&loose)).unwrap().tier, "review");
+
         // a cache beside its project is rebuilt by a command; the same folder orphaned is dead weight
         let live = Item { siblings: &["package.json".into()], ..item("node_modules", true, 5 << 20, 400, "proj") };
         assert_eq!(b.iter().find(|r| r.matches(&live)).unwrap().id, "cache");
         let orphan = Item { siblings: &["README.md".into()], ..item("node_modules", true, 5 << 20, 400, "proj") };
         assert_eq!(b.iter().find(|r| r.matches(&orphan)).unwrap().id, "orphan-cache");
+
+        // Naming a folder in the container list with no finer rule underneath is not a container,
+        // it is a blind spot: the walk passes through and nothing ever claims the bytes.
+        let containers: Vec<&str> = b.iter().filter(|r| r.descend).flat_map(|r| r.name.iter().map(String::as_str)).collect();
+        for blind in ["uv", "pip", "torch", "xet"] {
+            assert!(!containers.contains(&blind), "{blind} is walked through and nothing below it matches");
+        }
+        // and each of those now lands somewhere
+        assert_eq!(b.iter().find(|r| r.matches(&item("uv", true, 2 << 30, 10, "Users/x/.cache"))).unwrap().tier, "safe");
+        assert_eq!(b.iter().find(|r| r.matches(&item("torch", true, 2 << 30, 10, "Users/x/.cache"))).unwrap().id, "torch-cache");
+        assert_eq!(b.iter().find(|r| r.matches(&item("xet", true, 2 << 30, 10, "Users/x/.cache/huggingface"))).unwrap().id, "hf-xet");
+        // weights a library cached are not the output of a run on this machine, whatever the folder
+        // is called: the checkpoints under torch/hub come down again on demand
+        let cached = item("checkpoints", true, 2 << 30, 200, "Users/x/.cache/torch/hub");
+        assert_eq!(b.iter().find(|r| r.matches(&cached)).unwrap().id, "torch-cache");
+        let produced = item("checkpoints", true, 2 << 30, 200, "Users/x/proj/train");
+        assert_eq!(b.iter().find(|r| r.matches(&produced)).unwrap().id, "run-output");
 
         // inventory stays out of the recommendation tiers
         let big = item("movie.mov", false, 3 << 30, 10, "Movies");

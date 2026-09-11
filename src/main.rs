@@ -205,6 +205,7 @@ async fn serve() -> String {
         .route("/api/resume", post(resume))
         .route("/api/changes", get(changes))
         .route("/api/state", get(state_get).post(state_set))
+        .route("/api/skip", get(skip_get).post(skip_set))
         .route("/api/status", get(status))
         .route("/api/tree", get(tree))
         .route("/api/gunk", get(gunk_list))
@@ -267,6 +268,20 @@ struct Drive {
     total: u64,
     available: u64,
     removable: bool,
+    /// Local Time Machine snapshots holding this volume. While one exists the blocks a deleted
+    /// file used stay claimed, so the free figure above does not move when you delete something.
+    /// macOS thins them by itself, usually within a day.
+    snapshots: usize,
+}
+
+/// How many local snapshots hold a volume. The number is what matters, not their names: any at all
+/// means deleting a file today may free nothing visible until macOS thins them.
+fn local_snapshots(mount: &str) -> usize {
+    std::process::Command::new("tmutil")
+        .args(["listlocalsnapshots", mount])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.contains("com.apple.TimeMachine")).count())
+        .unwrap_or(0)
 }
 
 async fn drives() -> Json<Vec<Drive>> {
@@ -282,6 +297,7 @@ async fn drives() -> Json<Vec<Drive>> {
             total: d.total_space(),
             available: d.available_space(),
             removable: d.is_removable(),
+            snapshots: local_snapshots(&d.mount_point().to_string_lossy()),
         })
         .collect();
     out.sort_by(|a, b| a.mount.cmp(&b.mount));
@@ -294,12 +310,30 @@ struct LsQ {
     path: String,
 }
 
+/// A folder the user typed, resolved, and said in words if it does not resolve. `canonicalize`
+/// reports "No such file or directory (os error 2)", which names neither the path nor what to do
+/// about it, and an empty box reports it too. Every endpoint that takes a typed path uses this.
+fn folder(p: &str) -> Result<PathBuf, ApiErr> {
+    let t = p.trim();
+    if t.is_empty() {
+        return Err(bad("type a folder to look at, or pick one below"));
+    }
+    // the app writes paths back as ~/Library, so it had better read them that way too
+    let t = match (t.strip_prefix("~/"), std::env::var("HOME")) {
+        (Some(rest), Ok(h)) => format!("{h}/{rest}"),
+        _ if t == "~" => std::env::var("HOME").unwrap_or_else(|_| t.into()),
+        _ => t.to_string(),
+    };
+    let abs = PathBuf::from(&t).canonicalize().map_err(|_| bad(format!("there is no folder at {t}")))?;
+    if !abs.is_dir() {
+        return Err(bad(format!("{t} is a file, not a folder")));
+    }
+    Ok(abs)
+}
+
 /// Subfolders of a path, for the landing-page browser. Hidden ones sort last.
 async fn ls(Query(q): Query<LsQ>) -> Result<Json<serde_json::Value>, ApiErr> {
-    let p = PathBuf::from(&q.path).canonicalize().map_err(|e| bad(e.to_string()))?;
-    if !p.is_dir() {
-        return Err(bad("not a directory"));
-    }
+    let p = folder(&q.path)?;
     let mut dirs: Vec<String> = std::fs::read_dir(&p)
         .map_err(|e| bad(e.to_string()))?
         .filter_map(Result::ok)
@@ -344,10 +378,7 @@ async fn rescan_here(State(app): State<Shared>, Json(req): Json<PathReq>) -> Res
 }
 
 async fn start_scan(State(app): State<Shared>, Json(req): Json<PathReq>) -> Result<StatusCode, ApiErr> {
-    let root = PathBuf::from(&req.path).canonicalize().map_err(|e| bad(format!("{}: {e}", req.path)))?;
-    if !root.is_dir() {
-        return Err(bad("not a directory"));
-    }
+    let root = folder(&req.path)?;
     let progress = Arc::new(scan::Progress::new(&root));
     {
         let mut s = app.scan.lock().unwrap();
@@ -441,6 +472,9 @@ async fn status(State(app): State<Shared>) -> Json<serde_json::Value> {
     };
     Json(serde_json::json!({
         "state": state, "root": root, "files": files, "size": size, "live": live, "as_of": as_of, "snapshots": snapshots, "ru": ru_label, "denied": denied, "fda": scan::full_disk_access(),
+        // what this root would have held but was told to leave alone: without this the totals are
+        // short by however much is in there and nothing on screen says why
+        "skipped": scan::skipped().iter().filter(|p| root.is_some_and(|r| p.starts_with(r))).map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
         "job": app.job.lock().unwrap().as_ref().map(|(verb, done, total)| serde_json::json!({ "verb": verb, "done": done, "total": total })),
         "version": app.version.load(Ordering::Relaxed),
     }))
@@ -993,6 +1027,40 @@ async fn state_set(Json(req): Json<StateReq>) -> Result<StatusCode, ApiErr> {
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct SkipReq {
+    paths: Vec<String>,
+}
+/// The folders Di is told to stay out of. Absolute paths, one list for the whole machine, kept in
+/// ~/.dime/skip.json so it outlives the page and applies to every root.
+fn skip_view() -> serde_json::Value {
+    serde_json::json!({ "paths": scan::skipped().iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>() })
+}
+async fn skip_get() -> Json<serde_json::Value> {
+    Json(skip_view())
+}
+/// Replaces the whole list, so removing an entry and adding one are the same call. Every path is
+/// resolved and checked here rather than trusted: this list decides what a scan does not look at,
+/// and a typo that silently matches nothing is worse than an error.
+fn check_skips(paths: &[String]) -> Result<Vec<PathBuf>, ApiErr> {
+    let mut out: Vec<PathBuf> = vec![];
+    for p in paths {
+        let abs = folder(p)?;
+        if abs == Path::new("/") {
+            return Err(bad("skipping / would leave nothing to scan"));
+        }
+        if !out.contains(&abs) {
+            out.push(abs);
+        }
+    }
+    Ok(out)
+}
+async fn skip_set(Json(req): Json<SkipReq>) -> Result<Json<serde_json::Value>, ApiErr> {
+    let out = check_skips(&req.paths)?;
+    scan::set_skipped(&out).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(skip_view()))
+}
+
 fn have(tool: &str) -> bool {
     std::env::var_os("PATH").map(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file())).unwrap_or(false)
 }
@@ -1021,4 +1089,57 @@ async fn reset(State(app): State<Shared>, Json(req): Json<ResetReq>) -> Result<J
     drop(_g);
     let _ = &app;
     Ok(Json(serde_json::json!({ "purged": purged })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Everything a person can type into the box, and the sentence each one gets back. These are
+    /// the only paths in the server that take a string straight from the page, so they are the
+    /// ones that have to answer in words rather than in errno.
+    #[test]
+    fn typed_paths_resolve_or_say_why() {
+        let home = std::env::var("HOME").unwrap();
+        let msg = |r: Result<PathBuf, ApiErr>| r.unwrap_err().1;
+
+        assert_eq!(folder(&home).unwrap(), PathBuf::from(&home).canonicalize().unwrap());
+        assert_eq!(folder(&format!("  {home}  ")).unwrap(), PathBuf::from(&home).canonicalize().unwrap(), "trimmed, so a stray space is not an error");
+
+        // the app prints paths as ~/Library, so it has to read them back that way
+        assert_eq!(folder("~").unwrap(), PathBuf::from(&home).canonicalize().unwrap());
+        assert_eq!(folder("~/Library").unwrap(), PathBuf::from(format!("{home}/Library")).canonicalize().unwrap());
+
+        // an empty box is the start of typing, not a path: it used to come back as "os error 2"
+        assert!(msg(folder("")).contains("type a folder"));
+        assert!(msg(folder("   ")).contains("type a folder"));
+        assert!(!msg(folder("")).contains("os error"), "never the raw errno");
+
+        let gone = msg(folder("/no/such/folder/here"));
+        assert!(gone.contains("/no/such/folder/here"), "says which path: {gone}");
+        assert!(!gone.contains("os error"), "{gone}");
+
+        let file = format!("{home}/.dime/skip.json");
+        if Path::new(&file).is_file() {
+            assert!(msg(folder(&file)).contains("is a file, not a folder"));
+        }
+    }
+
+    /// The exclusion list decides what a scan never looks at, so a typo in it must be an error
+    /// rather than an entry that quietly matches nothing.
+    #[test]
+    fn exclusions_are_checked_before_they_are_kept() {
+        let home = std::env::var("HOME").unwrap();
+        let lib = format!("{home}/Library");
+
+        let ok = check_skips(&[lib.clone(), "~/Library".into()]).unwrap();
+        assert_eq!(ok.len(), 1, "the same folder spelled two ways is one exclusion");
+        assert!(ok[0].is_absolute());
+
+        assert!(check_skips(&["/".into()]).unwrap_err().1.contains("nothing to scan"));
+        assert!(check_skips(&["/no/such/folder".into()]).is_err());
+        // one bad entry fails the whole call, so a half-applied list is never written
+        assert!(check_skips(&[lib, "/no/such/folder".into()]).is_err());
+        assert!(check_skips(&[]).unwrap().is_empty());
+    }
 }

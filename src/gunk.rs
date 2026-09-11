@@ -1,7 +1,8 @@
 //! Finds removal candidates in the scanned tree and explains each one in plain language.
 //! Every candidate gets a tier: `safe` (regenerated automatically), `likely` (usually fine
 //! once you glance at it), `review` (big or old, your call). The rules are data: see rules.rs.
-use crate::rules::{self, Item, Rule};
+use crate::rules::{self, DiskCheck, Item, Rule};
+use rayon::prelude::*;
 use crate::scan::{join, Node};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -58,6 +59,9 @@ struct Walk {
     base: PathBuf,
     /// Whether each folder walked can be written to, cached because siblings share one.
     writable: HashMap<String, bool>,
+    /// Ignore patterns in force in each folder, gathered up to the repo root. `None` means the
+    /// folder is not inside a git repo at all, so there is nothing to ask. Cached per folder.
+    ignored: HashMap<String, Option<Vec<String>>>,
     out: Vec<Candidate>,
     /// (size, name) -> first path seen, for cheap duplicate detection of big files
     seen: HashMap<(u64, String), (String, i64)>,
@@ -105,12 +109,12 @@ fn months(days: i64) -> String {
 /// Rules are re-read each time, so edits to ~/.dime/rules.toml show up on the next rescan.
 /// Ollama stores weights by content hash, so the map shows anonymous sha256 blobs where people
 /// expect model names. Its manifests hold the mapping: one file per model:tag, listing the layers
-/// it is made of. Returns blob path -> (model name, size of the whole model), and separately the
+/// it is made of. Returns blob path -> every (model, whole-model size) that claims it, and separately the
 /// manifests whose blobs are no longer on disk: `ollama ls` reads manifests, so a model whose
 /// weights were removed behind Ollama's back keeps being listed as if it were there.
-fn ollama_models(store: &Path) -> (HashMap<PathBuf, (String, u64)>, Vec<Orphan>) {
+fn ollama_models(store: &Path) -> (Blobs, Vec<Orphan>) {
     let (manifests, blobs) = (store.join("manifests"), store.join("blobs"));
-    let mut out = HashMap::new();
+    let mut out: HashMap<PathBuf, Vec<(String, u64)>> = HashMap::new();
     let mut orphans = vec![];
     let mut stack = vec![manifests.clone()];
     while let Some(dir) = stack.pop() {
@@ -146,13 +150,18 @@ fn ollama_models(store: &Path) -> (HashMap<PathBuf, (String, u64)>, Vec<Orphan>)
                 let size = std::fs::symlink_metadata(&p).map(|m| m.len()).unwrap_or(0);
                 orphans.push(Orphan { manifest: p.clone(), model: model.clone(), missing, size });
             }
+            // one blob, every model built on it: models share a base layer far more often than
+            // they look like they do, and the last manifest read used to silently win
             for b in paths {
-                out.insert(b, (model.clone(), total));
+                out.entry(b).or_default().push((model.clone(), total));
             }
         }
     }
     (out, orphans)
 }
+
+/// One blob, and every (model, whole-model size) that names it as a layer.
+type Blobs = HashMap<PathBuf, Vec<(String, u64)>>;
 
 /// A model Ollama still lists although its weights are gone.
 struct Orphan {
@@ -195,10 +204,35 @@ fn open_paths() -> Vec<String> {
 }
 
 /// Is anything open underneath this path right now?
+///
+/// The list is sorted, so the files under `p` are the run starting at `p/`. Searching for `p`
+/// itself and looking at one entry is not the same thing: `.` sorts below `/`, so every sibling
+/// spelled `p.something` lands between the two and hides the run behind it. `com.apple.Safari`
+/// and `com.apple.Safari.SafeBrowsing` share a Caches folder, and that pair alone was enough to
+/// let Safari's cache read as idle while Safari held it open.
 fn in_use(w: &Walk, abs: &Path) -> bool {
     let p = abs.to_string_lossy();
-    let i = w.open.partition_point(|o| o.as_str() < p.as_ref());
-    w.open[i..].first().is_some_and(|o| o.as_str() == p || o.starts_with(&format!("{p}/")))
+    if w.open.binary_search(&p.to_string()).is_ok() {
+        return true;
+    }
+    let under = format!("{p}/");
+    let i = w.open.partition_point(|o| o.as_str() < under.as_str());
+    w.open.get(i).is_some_and(|o| o.starts_with(&under))
+}
+
+/// Folders whose contents are a replica of something in the cloud. Moving a file out of one of
+/// these is not archiving it: the sync client reads the removal and takes the file off every other
+/// device and out of the account, and the shelf cannot put that back. Di still measures them, and
+/// they still show on the map. It simply never suggests anything inside one.
+fn synced(path: &str) -> bool {
+    path.split('/').any(|s| {
+        // named exactly, never by a fragment: a folder called Sync or Box is somebody's project
+        matches!(s, "Mobile Documents" | "CloudStorage" | "Dropbox" | "Creative Cloud Files" | "pCloud Drive" | "Box Sync" | "Resilio Sync" | "Sync.com" | "MEGA" | "Nextcloud" | "Seafile")
+            || s.starts_with("Google Drive")
+            || s.starts_with("OneDrive")
+            || s.starts_with("iCloud")
+            || s.ends_with(".photoslibrary")
+    })
 }
 
 /// Removing something means writing to the folder that holds it, so that is what decides whether
@@ -215,12 +249,150 @@ fn removable(w: &mut Walk, dir: &str) -> bool {
     ok
 }
 
+/// The patterns one .gitignore lays down, normalised to bare names. Enough for the question being
+/// asked, which is whether a folder called `build` or `dist` is derived: those are written as a
+/// plain name, `/name`, `name/` or `**/name`, and never as anything cleverer.
+fn ignore_names(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join(".gitignore"))
+        .map(|t| {
+            t.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))
+                .map(|l| l.trim_start_matches("**/").trim_matches('/').to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Does the project itself say this folder is derived? A `dist` in .gitignore is output that the
+/// next build writes again. A `dist` that is committed is what somebody ships, and the two want
+/// opposite advice from a cleaner. Read from the .gitignore files rather than by running git,
+/// because git would be a process per candidate.
+///
+/// Outside a repo there is no such signal, so the answer is yes and the rule behaves as it always
+/// did: this narrows what gets offered where there is evidence, and changes nothing where there
+/// is none.
+fn git_ignored(w: &mut Walk, dir: &str, name: &str) -> bool {
+    if !w.ignored.contains_key(dir) {
+        let (mut pats, mut cur, mut in_repo) = (vec![], dir.to_string(), false);
+        loop {
+            let abs = if cur.is_empty() { w.base.clone() } else { w.base.join(&cur) };
+            pats.extend(ignore_names(&abs));
+            if abs.join(".git").exists() {
+                in_repo = true;
+                break;
+            }
+            match cur.rfind('/') {
+                Some(i) => cur.truncate(i),
+                None if !cur.is_empty() => cur.clear(),
+                None => break,
+            }
+        }
+        w.ignored.insert(dir.to_string(), in_repo.then_some(pats));
+    }
+    w.ignored[dir].as_ref().is_none_or(|pats| pats.iter().any(|p| p == name))
+}
+
+/// Every application bundle identifier installed on this machine, with the ids of the helpers and
+/// daemons that ship beside them. Built once, in parallel, because a cold `plutil` per app is a
+/// tenth of a second all told and the answer cannot change inside one run of DiMe.
+///
+/// Empty means the question could not be answered, not that nothing is installed, so `app_gone`
+/// reads an empty set as "say nothing" rather than "everything is orphaned".
+fn installed_bundles() -> &'static std::collections::HashSet<String> {
+    static IDS: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let roots = ["/Applications", "/System/Applications", "/Applications/Setapp", &format!("{home}/Applications")].map(PathBuf::from);
+        let mut apps = vec![];
+        // three levels deep: /Applications/Utilities/Foo.app and the folders vendors like to make
+        fn find_apps(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().is_some_and(|x| x == "app") {
+                    out.push(p);
+                } else if depth > 0 && p.is_dir() {
+                    find_apps(&p, depth - 1, out);
+                }
+            }
+        }
+        for r in &roots {
+            find_apps(r, 2, &mut apps);
+        }
+        let mut ids: std::collections::HashSet<String> = apps
+            .par_iter()
+            .filter_map(|a| {
+                let out = std::process::Command::new("plutil")
+                    .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+                    .arg(a.join("Contents/Info.plist"))
+                    .output()
+                    .ok()?;
+                out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+            })
+            .collect();
+        // Launch agents, daemons and privileged helpers are named by bundle id on disk, and they
+        // are exactly the things that keep a folder alive with no .app anywhere to prove it.
+        for d in ["/Library/LaunchAgents", "/Library/LaunchDaemons", "/Library/PrivilegedHelperTools", "/Library/Application Support", &format!("{home}/Library/LaunchAgents")] {
+            let Ok(rd) = std::fs::read_dir(d) else { continue };
+            for e in rd.flatten() {
+                ids.insert(e.file_name().to_string_lossy().trim_end_matches(".plist").to_string());
+            }
+        }
+        ids
+    })
+}
+
+/// Is this folder what an uninstalled application left behind?
+///
+/// Only ever says yes about a reverse-DNS folder name, because that is the one name on disk that
+/// maps to an application without guessing: `com.acme.Widget` is a bundle id, `Widget` is a word.
+/// Apple's own ids are never claimed: plenty of them belong to system services that ship no .app.
+/// A helper counts as installed when its app is, so `com.acme.Widget.Updater` survives as long as
+/// `com.acme.Widget` does.
+fn app_gone(name: &str) -> bool {
+    let ids = installed_bundles();
+    if ids.is_empty() || name.contains(' ') {
+        return false;
+    }
+    // A group container wears a team id or a `group.` in front of the identifier it belongs to,
+    // and the Apple test has to come after those come off: `group.com.apple.chronod` is Siri's,
+    // not some app's, and reading it before stripping was enough to offer four system services.
+    let base = name.trim_end_matches(".savedState").trim_end_matches(".binarycookies");
+    let base = base.strip_prefix("group.").unwrap_or(base);
+    let base = match base.split_once('.') {
+        Some((team, rest)) if team.len() == 10 && team.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) => rest,
+        _ => base,
+    };
+    if base.starts_with("com.apple.") || base.matches('.').count() < 2 {
+        return false;
+    }
+    // Matched at the vendor, not at the exact identifier. An app renames itself between versions
+    // (`com.microsoft.teams` became `com.microsoft.teams2`) and ships helpers under identifiers no
+    // bundle on disk carries, so demanding an exact match invents leftovers for software that is
+    // plainly still installed. An uninstall usually takes the whole vendor with it, and claiming
+    // less than we could is the right way to be wrong here.
+    let vendor = |id: &str| id.split('.').take(2).collect::<Vec<_>>().join(".");
+    let mine = vendor(base);
+    !ids.iter().any(|id| vendor(id) == mine)
+}
+
+/// Bytes under `n` that another path on the disk holds as well. One store hard-linked into every
+/// project is how pnpm, uv, bun and Homebrew all work, and the same blocks are then counted at
+/// every link. Removing one of them frees nothing until the last one goes.
+fn shared_bytes(n: &Node) -> u64 {
+    if !n.is_dir {
+        return if n.shared { n.size } else { 0 };
+    }
+    n.children.iter().map(shared_bytes).sum()
+}
+
 pub fn find_all(base: &Path, root: &Node) -> Vec<Candidate> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let cfg = rules::load();
     // Me's half of the app answers a question Di cannot: what is in use right this second.
     let open = if cfg.open_tier.is_some() { open_paths() } else { vec![] };
-    let mut w = Walk { now, rules: cfg.rules, open_tier: cfg.open_tier, open, base: base.to_path_buf(), writable: HashMap::new(), out: vec![], seen: HashMap::new() };
+    let mut w = Walk { now, rules: cfg.rules, open_tier: cfg.open_tier, open, base: base.to_path_buf(), writable: HashMap::new(), ignored: HashMap::new(), out: vec![], seen: HashMap::new() };
     walk(&mut w, root, "");
     name_stores(base, &mut w.out);
     w.out.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -281,7 +453,7 @@ fn name_ollama(base: &Path, out: &mut Vec<Candidate>, served: Option<PathBuf>) {
     for s in stores {
         let ours = served.as_deref().is_some_and(|d| same_dir(&s, d));
         let (m, o) = ollama_models(&s);
-        map.extend(m.into_iter().map(|(k, (model, total))| (k, (model, total, ours))));
+        map.extend(m.into_iter().map(|(k, models)| (k, (models, ours))));
         orphans.extend(o.into_iter().map(|o| (o, ours)));
     }
     for (o, ours) in orphans {
@@ -308,17 +480,31 @@ fn name_ollama(base: &Path, out: &mut Vec<Candidate>, served: Option<PathBuf>) {
         });
     }
     for c in out.iter_mut().filter(|c| c.reason == "ollama-model") {
-        if let Some((model, total, ours)) = map.get(&base.join(&c.path)) {
-            // only the served store: elsewhere the command would remove the wrong copy
-            c.remove_cmd = ours.then(|| c.remove_cmd.as_ref().map(|t| t.replace("{model}", model))).flatten();
-            c.name = model.clone();
-            let how = if *ours {
-                format!("Deleting this hands it to Ollama as `ollama rm {model}`, so its own list stays right. That is final: a pulled model downloads again, one you built with `ollama create` does not.")
-            } else {
-                "This store is not the one the ollama command talks to, so it is removed as plain files.".into()
-            };
-            c.note = format!("The weights of {model}, {} in all. {how} {}", human(*total), c.note);
+        let Some((models, ours)) = map.get(&base.join(&c.path)) else { continue };
+        let Some((model, total)) = models.first() else { continue };
+        if models.len() > 1 {
+            // A layer several models are built on. `ollama rm` on any one of them leaves the blob
+            // exactly where it is, so offering the command here would promise space it cannot give.
+            let names: Vec<&str> = models.iter().map(|(m, _)| m.as_str()).collect();
+            c.name = format!("layer of {}", names.join(" + "));
+            c.remove_cmd = None;
+            c.note = format!(
+                "One layer that {} models share: {}. It goes when the last of them goes and not before, so removing any one of them frees none of this. Remove them from Ollama by name rather than from here. {}",
+                names.len(),
+                names.join(", "),
+                c.note
+            );
+            continue;
         }
+        // only the served store: elsewhere the command would remove the wrong copy
+        c.remove_cmd = ours.then(|| c.remove_cmd.as_ref().map(|t| t.replace("{model}", model))).flatten();
+        c.name = model.clone();
+        let how = if *ours {
+            format!("Deleting this hands it to Ollama as `ollama rm {model}`, so its own list stays right. That is final: a pulled model downloads again, one you built with `ollama create` does not.")
+        } else {
+            "This store is not the one the ollama command talks to, so it is removed as plain files.".into()
+        };
+        c.note = format!("The weights of {model}, {} in all. {how} {}", human(*total), c.note);
     }
 }
 
@@ -376,8 +562,11 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             let key = (c.size, c.name.clone());
             if let Some((other, other_m)) = w.seen.get(&key).cloned() {
                 if other_m >= c.mtime {
-                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: None, under: vec![], has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false, remove_with: None };
-                    w.out.push(mk(&dup, format!("Same name and size as {other}.")));
+                    let dup = Rule { id: "duplicate".into(), tier: "review".into(), what: "Possible duplicates".into(), note: String::new(), weight: 1.5, dir: None, name: vec![], ext: vec![], parent_ends_with: vec![], under: vec![], has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0, descend: false, remove_with: None, git_ignored: false, app_gone: false };
+                    // same name, same size and only one copy of the bytes: these are two names
+                    // for one file, and removing either frees nothing at all
+                    let same_inode = if c.shared { " They are hard links to one another, so removing either frees nothing: the bytes go when the last name for them does." } else { "" };
+                    w.out.push(mk(&dup, format!("Same name and size as {other}.{same_inode}")));
                     continue;
                 }
             }
@@ -388,19 +577,39 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
         let it = Item { name: &c.name, is_dir: c.is_dir, ext: &e, size: c.size, age_days: age, age_known, parent: path, children: &kids, siblings: &sibs };
         // checked before the rule lookup so the two borrows of `w` never overlap; an item we cannot
         // remove still gets walked into, since something deeper may sit in a folder we do own
-        let can_remove = removable(w, path);
-        let hit = w.rules.iter().filter(|_| can_remove).find(|r| r.matches(&it));
-        if hit.is_some_and(|r| r.descend) {
+        // ...and a file that syncs is never ours to remove, however ordinary its name looks
+        let can_remove = removable(w, path) && !synced(&p);
+        let hit = w.rules.iter().filter(|_| can_remove).find(|r| r.matches(&it)).cloned();
+        if hit.as_ref().is_some_and(|r| r.descend) {
             // a container: named only so the walk knows to carry on past it
             if c.is_dir {
                 walk(w, c, &p);
             }
             continue;
         }
-        if let Some(r) = hit {
+        // The half of the matcher contract that reads the disk rather than the tree, declared on
+        // the rule as `DiskCheck` and answered here. Failing one means the item was never a
+        // candidate at all: the walk carries on underneath it as if no rule had named it.
+        let hit = hit.filter(|r| {
+            r.disk_checks().all(|check| match check {
+                DiskCheck::GitIgnored => git_ignored(w, path, &c.name),
+                DiskCheck::AppGone => app_gone(&c.name),
+            })
+        });
+        if let Some(r) = &hit {
             let idle = if age_known { format!("Idle {}.", months(age)) } else { "Age unknown.".into() };
             let note = r.note.replace("{idle}", &idle).replace("{age}", &if age_known { months(age) } else { "an unknown time".into() });
             let mut cand = mk(r, note);
+            // Hard-linked bytes are counted at every path that holds them, so a row can promise
+            // space that removing it will not give back. Say so on the row rather than after.
+            let shared = shared_bytes(c);
+            if shared >= cand.size && shared > 0 {
+                cand.note = format!("Every byte here is hard-linked from somewhere else on the disk, so removing this frees nothing until the last link to it goes too. {}", cand.note);
+            } else if human(cand.size - shared) != human(cand.size) {
+                // only worth a sentence when it changes the figure the row is already showing:
+                // a few linked megabytes inside three gigabytes reads as a contradiction, not a warning
+                cand.note = format!("{} of this is hard-linked from somewhere else on the disk, so removing it frees about {}, not {}. {}", human(shared), human(cand.size - shared), human(cand.size), cand.note);
+            }
             // Me knows what Di cannot: something being written to right now is not safe to move,
             // whatever its name suggests. This is the one check that uses live evidence.
             if let Some(t) = w.open_tier.clone() {
@@ -414,6 +623,14 @@ fn walk(w: &mut Walk, n: &Node, path: &str) {
             walk(w, c, &p);
         }
     }
+}
+
+/// Bytes under `n` belonging to files untouched since `cutoff` (files only; a folder counts what is inside it).
+pub fn idle_bytes(n: &Node, cutoff: i64) -> u64 {
+    if !n.is_dir {
+        return if n.atime.max(n.mtime) <= cutoff { n.size } else { 0 };
+    }
+    n.children.iter().map(|c| idle_bytes(c, cutoff)).sum()
 }
 
 #[cfg(test)]
@@ -470,7 +687,7 @@ mod tests {
         assert!(out.iter().all(|c| c.note.contains("not the one the ollama command talks to")));
 
         // and served, that same blob is handed to ollama by name
-        let mut out = vec![blob];
+        let mut out = vec![blob.clone()];
         name_ollama(&dir, &mut out, Some(store.clone()));
         let b = out.iter().find(|c| c.reason == "ollama-model").unwrap();
         assert_eq!(b.name, "qwen3:8b");
@@ -478,6 +695,19 @@ mod tests {
         assert!(runnable(c.remove_cmd.as_deref().unwrap()), "no placeholder left to fill");
         assert!(c.note.contains("4.7 GB"), "says what is missing, not what it frees: {}", c.note);
         assert!(c.size < 1000, "removing the entry frees only the manifest itself");
+
+        // A layer two models are built on. `ollama rm` on either leaves it exactly where it is,
+        // so the row must not offer a command, and must not read as that model's weights.
+        let m2 = store.join("manifests/registry.ollama.ai/library/qwen3-coder");
+        std::fs::create_dir_all(&m2).unwrap();
+        std::fs::write(m2.join("8b"), br#"{"layers":[{"digest":"sha256:here","size":7}]}"#).unwrap();
+        let mut out = vec![blob.clone()];
+        name_ollama(&dir, &mut out, Some(store.clone()));
+        let b = out.iter().find(|c| c.reason == "ollama-model").unwrap();
+        assert!(b.remove_cmd.is_none(), "removing one of the two would free none of it");
+        assert!(b.note.contains("qwen3:8b") && b.note.contains("qwen3-coder:8b"), "names both: {}", b.note);
+        assert!(b.note.contains("frees none of this"), "{}", b.note);
+        std::fs::remove_dir_all(&m2).unwrap();
 
         // every blob present: nothing to report
         std::fs::write(store.join("blobs/sha256-gone"), b"x").unwrap();
@@ -501,13 +731,95 @@ mod tests {
         // command filled in from the folder's own name, so a new tool is a rule and nothing else
         let r = Rule {
             id: "newtool-model".into(), tier: "review".into(), what: "NewTool models".into(), note: String::new(),
-            weight: 1.0, dir: Some(true), name: vec![], ext: vec![], parent_ends_with: Some(".newtool/models".into()),
+            weight: 1.0, dir: Some(true), name: vec![], ext: vec![], parent_ends_with: vec![".newtool/models".into()],
             under: vec![], has_child: vec![], has_sibling: vec![], no_sibling: vec![], min_size: 0, min_age_days: 0,
-            descend: false, remove_with: Some("newtool remove {name}".into()),
+            descend: false, remove_with: Some("newtool remove {name}".into()), git_ignored: false, app_gone: false,
         };
         let filled = r.remove_with.as_ref().map(|t| t.replace("{name}", "llama-3-8b"));
         assert_eq!(filled.as_deref(), Some("newtool remove llama-3-8b"));
         assert!(runnable(filled.as_deref().unwrap()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The three checks that ask the machine rather than the tree: what is open right now, what
+    /// belongs to the cloud, and what an uninstall left behind.
+    #[test]
+    fn live_checks() {
+        let w = Walk {
+            now: 0,
+            rules: vec![],
+            open_tier: None,
+            // exactly as open_paths() leaves it: sorted, and `.` sorts below `/`
+            open: vec!["/c/com.apple.Safari.SafeBrowsing/db".into(), "/c/com.apple.Safari/Cache.db".into(), "/c/z".into()],
+            base: PathBuf::from("/"),
+            writable: HashMap::new(),
+            ignored: HashMap::new(),
+            out: vec![],
+            seen: HashMap::new(),
+        };
+        assert!(w.open.windows(2).all(|p| p[0] <= p[1]), "the check below relies on the order");
+        // the sibling sorting in between is what used to hide the whole run behind it
+        assert!(in_use(&w, Path::new("/c/com.apple.Safari")), "Safari holds this open");
+        assert!(in_use(&w, Path::new("/c/com.apple.Safari.SafeBrowsing")));
+        assert!(in_use(&w, Path::new("/c/com.apple.Safari/Cache.db")), "the file itself");
+        assert!(!in_use(&w, Path::new("/c/com.apple.Saf")), "a prefix is not a parent");
+        assert!(!in_use(&w, Path::new("/c/nothing")));
+
+        // a synced folder is a replica: moving a file out of one takes it off every other device,
+        // and the shelf cannot undo that
+        assert!(synced("Library/Mobile Documents/com~apple~CloudDocs/Downloads/old.zip"));
+        assert!(synced("Library/CloudStorage/GoogleDrive-me/My Drive/old.zip"));
+        assert!(synced("Dropbox/archive"));
+        assert!(synced("Pictures/My Photos.photoslibrary/resources/derivatives"));
+        assert!(!synced("Downloads/old.zip"), "the ordinary one still gets offered");
+
+        // leftovers: only ever claimed for a reverse-DNS name, and never for Apple's own
+        assert!(!app_gone("com.apple.Safari"), "plenty of Apple ids ship no .app at all");
+        assert!(!app_gone("Google"), "a word is not a bundle id");
+        assert!(!app_gone("com.foo"), "nor is one dot");
+        if let Some(id) = installed_bundles().iter().next().cloned() {
+            assert!(!app_gone(&id), "{id} is installed");
+            assert!(!app_gone(&format!("{id}.Helper")), "a helper lives as long as its app");
+            assert!(!app_gone(&format!("ABCDE12345.{id}")), "a group container wears a team id");
+            assert!(app_gone("com.example.nothing.installed"));
+            assert!(app_gone("ABCDE12345.com.example.nothing.installed"));
+        }
+    }
+
+    /// Two rows that used to promise space they could not give: a folder hard-linked from a shared
+    /// store, and a build folder the project itself tracks rather than ignores.
+    #[test]
+    fn promises_only_what_it_can_free() {
+        let dir = std::env::temp_dir().join(format!("gunk-promise-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("dist")).unwrap();
+        std::fs::create_dir_all(repo.join("out")).unwrap();
+        std::fs::write(repo.join(".gitignore"), b"node_modules\n/dist/\n").unwrap();
+        std::fs::write(repo.join("package.json"), b"{}").unwrap();
+        std::fs::write(repo.join("dist/a.bin"), vec![0u8; 25 << 20]).unwrap();
+        std::fs::write(repo.join("out/b.bin"), vec![0u8; 26 << 20]).unwrap();
+        // a package store hard-linked into the project, which is how pnpm, uv and bun all work
+        let store = dir.join("store");
+        std::fs::create_dir_all(store.join("v1")).unwrap();
+        std::fs::create_dir_all(repo.join("node_modules/pkg")).unwrap();
+        std::fs::write(store.join("v1/lib.js"), vec![0u8; 4 << 20]).unwrap();
+        std::fs::hard_link(store.join("v1/lib.js"), repo.join("node_modules/pkg/lib.js")).unwrap();
+
+        let tree = scan::scan(&dir, &scan::Progress::new(&dir));
+        let all = find_all(&dir, &tree);
+        let by = |p: &str| all.iter().find(|c| c.path == p);
+
+        // the project says dist is derived, so it is output; out is tracked, so it is a deliverable
+        assert_eq!(by("repo/dist").map(|c| c.reason.as_str()), Some("build"));
+        assert!(by("repo/out").is_none(), "a build folder the repo tracks is what somebody ships");
+
+        // and the cache whose bytes belong to a store somewhere else says what removing it frees
+        let nm = by("repo/node_modules").expect("still a cache");
+        assert_eq!(nm.reason, "cache");
+        assert!(nm.note.contains("hard-linked"), "must not promise bytes another path holds: {}", nm.note);
+        assert!(nm.note.contains("frees nothing"), "{}", nm.note);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -552,12 +864,4 @@ mod tests {
         assert_eq!(scan::get(&tree, "proj").unwrap().size + scan::get(&tree, "Downloads").unwrap().size, tree.size);
         std::fs::remove_dir_all(&dir).unwrap();
     }
-}
-
-/// Bytes under `n` belonging to files untouched since `cutoff` (files only; a folder counts what is inside it).
-pub fn idle_bytes(n: &Node, cutoff: i64) -> u64 {
-    if !n.is_dir {
-        return if n.atime.max(n.mtime) <= cutoff { n.size } else { 0 };
-    }
-    n.children.iter().map(|c| idle_bytes(c, cutoff)).sum()
 }

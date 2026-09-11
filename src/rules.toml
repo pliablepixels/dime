@@ -15,7 +15,7 @@
 #   dir                true = folders only, false = files only, omit = either
 #   name               exact names, any of
 #   ext                file extensions, any of (lower-case, no dot)
-#   parent_ends_with   the folder holding it ends with this path, e.g. "Developer/Xcode"
+#   parent_ends_with   the folder holding it ends with one of these, e.g. "Developer/Xcode"
 #                      with no `name`, this matches every child of that folder, which is how you flag
 #                      one OS version or one simulator instead of the whole tree that holds them
 #   under              some ancestor folder has this name, e.g. "Downloads"
@@ -27,6 +27,12 @@
 #   min_age_days       untouched (no read or write) for at least this many days
 #   descend            true = this is a container, not a candidate: keep walking inside it. Without
 #                      this, a rule that names a folder hides every finer rule underneath it
+#   git_ignored        true = only match when the project itself ignores this folder, i.e. it is
+#                      output rather than something somebody ships. Outside a git repo there is no
+#                      such signal and the matcher stands aside
+#   app_gone           true = only match a folder named for an application bundle identifier that
+#                      nothing installed here publishes: what an uninstall left behind. Matched at
+#                      the vendor rather than the exact identifier, and never for Apple's own
 #
 # disable = ["downloads", "stale"]   # in your file: switch built-in ids off
 
@@ -38,6 +44,20 @@ open_tier = "review"
 
 # A cache with its project still beside it is rebuilt by one command. The same folder with the
 # project gone is an orphan: nothing will ever rebuild it, and nothing still needs it.
+# A virtualenv is the one cache that can hold work nothing recorded: `pip install` typed by hand
+# leaves no lock file, so with no manifest beside it there is no command that puts the env back.
+# Same folder with a manifest is rebuilt in one command and falls through to "cache" below.
+[[rule]]
+id = "venv-nolock"
+tier = "review"
+what = "Virtualenvs with nothing to rebuild them from"
+note = "No lock or requirements file beside it, so nothing records what is installed here. Run `pip freeze > requirements.txt` first if you want it back. {idle}"
+weight = 1.4
+dir = true
+name = [".venv", "venv", ".virtualenv", "env"]
+no_sibling = ["pyproject.toml", "requirements.txt", "requirements.in", "setup.py", "setup.cfg", "Pipfile", "Pipfile.lock", "poetry.lock", "uv.lock", "environment.yml", "conda.yaml"]
+min_size = "20 MB"
+
 [[rule]]
 id = "orphan-cache"
 tier = "safe"
@@ -45,7 +65,7 @@ what = "Caches whose project is gone"
 note = "Nothing beside it builds this any more. Nothing will rebuild it either. {idle}"
 weight = 3.2
 dir = true
-name = ["node_modules", "target", ".venv", "venv", "Pods", ".next", ".turbo", ".nuxt", ".dart_tool", ".angular", "bower_components"]
+name = ["node_modules", "target", "Pods", ".next", ".turbo", ".nuxt", ".dart_tool", ".angular", "bower_components"]
 no_sibling = ["package.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "Podfile", "pubspec.yaml", "angular.json", "go.mod", "Gemfile", "setup.py"]
 
 [[rule]]
@@ -68,8 +88,10 @@ what = "Container"
 note = ""
 descend = true
 dir = true
-name = ["huggingface", "lm-studio", "lmstudio", "torch", "uv", "pip", "hub", "models", "blobs", "manifests",
-        "nomic.ai", "jan", "GPT4All", "Ollama", "LM Studio", "datasets", "xet"]
+# Only folders with a finer rule underneath belong here. A name listed with nothing below it to
+# match is not a container, it is a blind spot: the walk passes through and the bytes go unclaimed.
+name = ["huggingface", "lm-studio", "lmstudio", "hub", "models", "blobs", "manifests",
+        "nomic.ai", "jan", "GPT4All", "Ollama", "LM Studio", "datasets"]
 
 # ---- models and agents ----
 # Weights are the biggest thing on a developer's disk now, and they arrive in a dozen places. Each
@@ -98,6 +120,19 @@ weight = 1.3
 dir = true
 parent_ends_with = "huggingface/hub"
 min_size = "50 MB"
+
+# The hub's newer chunk store. Pure cache: every chunk came down with a model and comes down
+# again. It sits beside hub rather than under .cache, so the generic cache rule never sees it.
+[[rule]]
+id = "hf-xet"
+tier = "safe"
+what = "Hugging Face chunk cache"
+note = "Chunks the hub downloaded alongside your models. Fetched again with them. {idle}"
+weight = 2.6
+dir = true
+name = ["xet"]
+under = "huggingface"
+min_size = "20 MB"
 
 [[rule]]
 id = "hf-datasets"
@@ -175,6 +210,20 @@ dir = false
 ext = ["gguf"]
 min_size = "200 MB"
 
+# Read before "run-output": a folder called checkpoints inside a cache holds weights something
+# downloaded, not the result of a run on this machine. Without this the two are indistinguishable
+# by name, and torch's own `hub/checkpoints` gets described as work no download can bring back.
+[[rule]]
+id = "torch-cache"
+tier = "likely"
+what = "Model caches"
+note = "Weights a library downloaded into its cache. Fetched again on demand. {idle}"
+weight = 1.5
+dir = true
+name = ["checkpoints"]
+under = [".cache", "Caches"]
+min_size = "50 MB"
+
 # Before every cache rule: an embedding store is a database that happens to live in a cache folder.
 # Rebuilding it means paying for the embeddings again, and if the documents it was built from have
 # moved on, it cannot be rebuilt at all. Never a suggestion.
@@ -199,6 +248,31 @@ dir = true
 name = ["checkpoints", "checkpoint", "ckpt", "runs", "wandb", "mlruns", "lora", "loras", "adapters", "finetune", "fine_tune", "outputs"]
 min_size = "50 MB"
 
+# The same thing one level up: libraries that keep their downloads in a dot-folder of their own
+# instead of under .cache. Adding another is adding a word.
+[[rule]]
+id = "torch-cache"
+tier = "likely"
+what = "Model caches"
+note = "Weights a library downloaded for itself. Fetched again on demand. {idle}"
+weight = 1.5
+dir = true
+name = [".insightface", ".keras", ".paddle", ".deepface", ".u2net", ".EasyOCR", ".fastai", ".modelscope",
+        ".triton", ".nv", ".vllm", ".pyannote", ".torch", ".timm", ".stanza_resources", ".allennlp"]
+min_size = "50 MB"
+
+# A weight folder somebody curated by hand is not a cache: ComfyUI's checkpoints, LoRAs and VAEs
+# are dropped there one at a time and only some of them are still downloadable.
+[[rule]]
+id = "comfyui-model"
+tier = "review"
+what = "ComfyUI models"
+note = "Weights ComfyUI loads from. Some were downloaded, some were put here by hand, and nothing on disk says which. {idle}"
+weight = 1.2
+dir = true
+parent_ends_with = "ComfyUI/models"
+min_size = "100 MB"
+
 [[rule]]
 id = "torch-cache"
 tier = "likely"
@@ -206,7 +280,8 @@ what = "Model caches"
 note = "Weights and checkpoints a library downloaded for itself. Fetched again on demand. {idle}"
 weight = 1.5
 dir = true
-name = ["torch", "whisper", "mlx", "sentence_transformers", "transformers", "timm", "open_clip", "llama_index", "onnx"]
+name = ["torch", "whisper", "mlx", "sentence_transformers", "transformers", "timm", "open_clip", "clip",
+        "llama_index", "onnx", "diffusers", "spacy", "flair", "gdown", "kagglehub"]
 under = ".cache"
 min_size = "100 MB"
 
@@ -245,6 +320,122 @@ name = ["ms-playwright", "ms-playwright-go", "puppeteer", "Chromium", "chrome"]
 under = "Caches"
 min_size = "100 MB"
 
+# ---- what uninstalling leaves behind ----
+# Dragging an app to the Trash takes the app. Everything it wrote under Library stays, and on a
+# machine a few years old that is the largest single pile of dead weight on the disk. A folder
+# named for a bundle identifier is the one leftover that can be identified rather than guessed:
+# see `app_gone` in gunk.rs, which only answers for a reverse-DNS name, never for Apple's own, and
+# matches at the vendor so a helper or a renamed version still counts as installed. Reviewed rather
+# than safe: an app living somewhere DiMe did not look would read as uninstalled.
+# Everything an uninstall leaves under Library that still has the app's documents and settings in
+# it. One rule for all three folders, because they want the same answer and the same warning.
+[[rule]]
+id = "app-leftover"
+tier = "review"
+what = "Left behind by apps you removed"
+note = "Nothing installed on this machine publishes this identifier, so this is what an uninstall left behind, settings and documents included. Background helpers sometimes ship without an app of their own, so give the name a look before it goes. {idle}"
+weight = 2.0
+dir = true
+app_gone = true
+parent_ends_with = ["Application Support", "Containers", "Group Containers"]
+min_size = "20 MB"
+min_age_days = 7
+
+[[rule]]
+id = "app-leftover"
+tier = "likely"
+what = "Left behind by apps you removed"
+note = "The cache of an app that is not installed any more, so nothing will ever read it again. {idle}"
+weight = 2.2
+dir = true
+app_gone = true
+parent_ends_with = "Caches"
+min_size = "20 MB"
+min_age_days = 7
+
+[[rule]]
+id = "app-leftover"
+tier = "likely"
+what = "Left behind by apps you removed"
+note = "Web storage of an app that is not installed any more. {idle}"
+weight = 2.0
+dir = true
+app_gone = true
+under = ["HTTPStorages", "WebKit", "Saved Application State", "Application Scripts"]
+min_size = "10 MB"
+min_age_days = 7
+
+# Window positions and untitled documents macOS reopens for you. Every app writes it again the
+# next time it quits, and an app that never runs again has no use for it either way.
+[[rule]]
+id = "saved-state"
+tier = "safe"
+what = "Reopen-window state"
+note = "What macOS reopens an app's windows from. Written again every time the app quits."
+weight = 2.4
+dir = true
+name = ["Saved Application State"]
+min_size = "20 MB"
+
+# Crash logs. Apple already has the ones it wanted.
+[[rule]]
+id = "crashlogs"
+tier = "safe"
+what = "Crash & diagnostic reports"
+note = "Reports about crashes that already happened. Nothing reads them back."
+weight = 2.4
+dir = true
+name = ["DiagnosticReports", "CrashReporter", "CoreSimulator", "Feedback"]
+under = ["Logs", "Application Support"]
+min_size = "20 MB"
+
+# Updaters keep the installer after installing from it, and none of them ever come back for it.
+[[rule]]
+id = "update-leftovers"
+tier = "safe"
+what = "Finished updates"
+note = "Downloaded and already installed. Updaters fetch a fresh copy next time rather than reusing this. {idle}"
+weight = 2.4
+dir = true
+name = ["Updates", "updates", "SoftwareUpdate", "PKInstallSandboxManager", "com.apple.SoftwareUpdate"]
+under = ["Library"]
+min_size = "50 MB"
+
+[[rule]]
+id = "ios-updates"
+tier = "likely"
+what = "iOS & iPadOS update files"
+note = "A downloaded device update, already applied or long superseded. Finder fetches it again if it ever needs it. {idle}"
+weight = 2.0
+dir = false
+ext = ["ipsw"]
+min_size = "100 MB"
+
+# Mail keeps every attachment you ever opened, separately from the message it came with.
+[[rule]]
+id = "mail-downloads"
+tier = "review"
+what = "Mail attachments"
+note = "Attachments Mail saved when you opened them. The messages still hold their own copies, so these are duplicates, but anything you dragged out of Mail and never filed lives only here. {idle}"
+weight = 1.4
+dir = true
+name = ["Mail Downloads", "MailDownloads", "Mail Attachments"]
+min_size = "50 MB"
+
+# Read before the app-cache rule below. Poetry puts whole virtualenvs under Caches, and the
+# generic rule there would call them safe. They rebuild from a lock file, but not instantly, and
+# not at all for a project whose lock has moved on.
+[[rule]]
+id = "poetry-venv"
+tier = "review"
+what = "Poetry virtualenvs"
+note = "Whole environments, not downloads. `poetry install` rebuilds one from its lock file, which takes a while and needs the project still around. {idle}"
+weight = 1.2
+dir = true
+name = ["pypoetry", "virtualenvs", "pyenv", "conda", "miniconda3", "anaconda3"]
+parent_ends_with = "Caches"
+min_size = "50 MB"
+
 # A cache folder is a container: one per app inside it, and that is the unit worth showing. Naming
 # the container instead would stop the walk before it reached any of the rules above.
 [[rule]]
@@ -254,17 +445,7 @@ what = "App caches"
 note = "One app's cache. It rebuilds what it needs, and may start slower once. {idle}"
 weight = 2.5
 dir = true
-parent_ends_with = "Caches"
-min_size = "20 MB"
-
-[[rule]]
-id = "appcache"
-tier = "safe"
-what = "App caches"
-note = "One app's cache. It rebuilds what it needs, and may start slower once. {idle}"
-weight = 2.5
-dir = true
-parent_ends_with = ".cache"
+parent_ends_with = ["Caches", ".cache"]
 min_size = "20 MB"
 
 [[rule]]
@@ -316,15 +497,6 @@ dir = true
 name = [".Trash"]
 
 [[rule]]
-id = "trash"
-tier = "safe"
-what = "Already in the Trash"
-note = "Empty the Trash to get this space back."
-weight = 3.0
-dir = true
-name = [".Trash"]
-
-[[rule]]
 id = "backups"
 tier = "review"
 what = "iPhone & iPad backups"
@@ -344,14 +516,65 @@ dir = true
 name = ["Archives"]
 parent_ends_with = "Developer/Xcode"
 
+# Package manager stores. Each is re-downloadable, and each is also hard-linked into every
+# project that uses it, so the row says what removing it really frees (see "shared" in gunk.rs).
+[[rule]]
+id = "pkg-store"
+tier = "likely"
+what = "Package manager stores"
+note = "Downloaded packages, fetched again on the next install. {idle}"
+weight = 1.7
+dir = true
+name = ["registry", "git", "store", "cache"]
+under = [".cargo", "pnpm", ".bun", ".deno", ".yarn"]
+min_size = "100 MB"
+
+[[rule]]
+id = "toolchain"
+tier = "likely"
+what = "Installed toolchains"
+note = "One toolchain. `rustup toolchain install` puts it back. {idle}"
+weight = 1.6
+dir = true
+parent_ends_with = ".rustup/toolchains"
+min_size = "100 MB"
+
+# An editor's local history is the undo that outlives the editor: edits it kept that were never
+# committed anywhere. Inventory only, like the agent transcripts above.
+[[rule]]
+id = "editor-history"
+tier = "note"
+what = "Editor local history"
+note = "Versions of your files the editor kept outside git. Nothing regenerates them. {idle}"
+weight = 1.0
+dir = true
+name = ["History", "LocalHistory"]
+under = ["Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium", "JetBrains"]
+min_size = "20 MB"
+
+# The rest of the VM field. Docker.raw has its own rule below; these keep their disks in a folder.
+[[rule]]
+id = "diskimage"
+tier = "review"
+what = "VM & disk images"
+note = "A virtual machine's disk. Delete only if the VM is gone: everything installed inside it goes too. {idle}"
+weight = 1.2
+dir = true
+name = [".colima", ".lima", ".orbstack", ".docker", ".vagrant.d", "vmware", "Parallels"]
+min_size = "1 GB"
+
+# `git_ignored` is what separates output from a deliverable. A `dist` the repo ignores is written
+# again by the next build; a `dist` the repo tracks is the thing somebody ships. Outside a repo
+# there is no signal either way and the rule behaves as it always has.
 [[rule]]
 id = "build"
 tier = "likely"
 what = "Build output"
-note = "Regenerated by the next build. Check it is not deployed from here."
+note = "Ignored by the project itself, so the next build writes it again."
 weight = 1.5
 dir = true
-name = ["build", "dist", "out", ".build"]
+name = ["build", "dist", "out", ".build", "target", "bin", "obj", "coverage", ".output"]
+git_ignored = true
 min_size = "20 MB"
 
 [[rule]]
@@ -401,7 +624,17 @@ tier = "review"
 what = "VM & disk images"
 note = "Virtual disk. Delete only if the VM is gone. {idle}"
 dir = false
-ext = ["qcow2", "vmdk", "vdi", "vhd", "vhdx", "img", "raw", "sparseimage", "sparsebundle"]
+ext = ["qcow2", "vmdk", "vdi", "vhd", "vhdx", "img", "raw", "sparseimage", "sparsebundle", "diffdisk"]
+min_size = "100 MB"
+
+# Parallels, VMware and UTM keep a VM in a folder whose name carries the extension.
+[[rule]]
+id = "diskimage"
+tier = "review"
+what = "VM & disk images"
+note = "A whole virtual machine. Delete only if you are done with it: nothing brings back what was installed inside. {idle}"
+dir = true
+ext = ["pvm", "vmwarevm", "utm", "qvm"]
 min_size = "100 MB"
 
 [[rule]]

@@ -497,6 +497,14 @@
   #reset:hover { color: var(--hot); border-color: rgba(255,122,61,.45); }
   #app[hidden] ~ #reset, body[data-mode="mem"] #reset { right: 60px; }
   body[data-scanning] #reset { display: none; }
+  /* Same furniture as Reset, one slot further left, so exclusions are reachable from the landing
+     page and from a live map alike rather than only while a path is in the box. */
+  #excl-btn { position: fixed; top: 22px; right: calc(var(--pw) + 136px); z-index: 5; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: rgba(16,22,38,.7); backdrop-filter: blur(12px); color: var(--ink-3); font-size: 12px; font-weight: 600; }
+  #excl-btn:hover { color: #F5C26B; border-color: rgba(245,194,107,.5); }
+  #excl-btn.has { color: #F5C26B; border-color: rgba(245,194,107,.35); }
+  #app[hidden] ~ #excl-btn, body[data-mode="mem"] #excl-btn { right: 126px; }
+  body[data-scanning] #excl-btn { display: none; }
+  @media (max-width: 860px) { #excl-btn { right: 126px; } }
   #resetdlg { background: var(--panel); backdrop-filter: blur(18px); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(480px, 92vw); box-shadow: 0 24px 80px rgba(0,0,0,.6); }
   #resetdlg::backdrop { background: rgba(13,19,33,.55); backdrop-filter: blur(4px); }
   #resetdlg .head { padding: 18px 20px 8px; font-size: 20px; font-weight: 800; }
@@ -505,6 +513,39 @@
   #resetdlg label input { accent-color: var(--hot); margin: 2px 0 0; } #resetdlg label small { display: block; color: var(--ink-2); font-size: 12px; margin-top: 2px; }
   #resetdlg label.hot b { color: var(--hot); }
   #resetdlg .foot { display: flex; gap: 8px; justify-content: flex-end; padding: 14px 20px 18px; }
+  #excldlg { background: var(--panel); backdrop-filter: blur(18px); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(620px, 94vw); max-height: 84vh; flex-direction: column; box-shadow: 0 24px 80px rgba(0,0,0,.6); }
+  #excldlg[open] { display: flex; }
+  #excldlg::backdrop { background: rgba(13,19,33,.55); backdrop-filter: blur(4px); }
+  #excldlg .head { padding: 18px 20px 12px; }
+  #excldlg .title { font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+  #excldlg .sub { color: var(--ink-2); font-size: 13px; margin-top: 4px; line-height: 1.45; }
+  #excldlg .cur { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 20px 14px; }
+  #excldlg .cur .none { color: var(--ink-3); font-size: 13px; }
+  #excldlg .cur button { display: flex; align-items: center; gap: 8px; background: rgba(245,194,107,.1); border: 1px solid rgba(245,194,107,.35); border-radius: 10px; padding: 6px 11px; color: #F5C26B; font-size: 13px; font-weight: 600; }
+  #excldlg .cur button:hover { background: rgba(245,194,107,.2); border-color: rgba(245,194,107,.8); }
+  #excldlg .cur button .x { opacity: .7; font-weight: 700; }
+  #excldlg .crumb { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; padding: 10px 20px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 13px; }
+  #excldlg .crumb button { background: none; border: 0; padding: 2px 0; color: inherit; font-weight: 600; }
+  #excldlg .crumb button:hover, #excldlg .crumb button:last-of-type { color: var(--ink); }
+  #excldlg .crumb .sep { opacity: .4; }
+  #excldlg .crumb .here { margin-left: auto; border: 1px solid rgba(245,194,107,.35); border-radius: 8px; padding: 4px 10px; font-size: 12px; color: var(--ink-2); background: rgba(245,194,107,.06); }
+  #excldlg .crumb .here:hover { color: #F5C26B; border-color: rgba(245,194,107,.75); }
+  #excldlg .crumb .here:disabled { opacity: .4; }
+  #excldlg .list { overflow: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); scrollbar-width: thin; min-height: 240px; }
+  #excldlg .erow { display: flex; align-items: center; gap: 10px; padding: 2px 12px 2px 20px; }
+  #excldlg .erow:hover { background: rgba(232,230,223,.05); }
+  #excldlg .erow .nm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; background: none; border: 0; padding: 9px 0; text-align: left; font-size: 15px; color: var(--ink); overflow: hidden; }
+  #excldlg .erow .nm span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #excldlg .erow.dot .nm { color: var(--ink-2); }
+  #excldlg .erow.off .nm { color: var(--ink-3); text-decoration: line-through; }
+  #excldlg .erow .nm svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; opacity: .55; }
+  #excldlg .erow .tg { flex: none; border: 1px solid transparent; border-radius: 8px; padding: 5px 11px; font-size: 12px; font-weight: 600; color: var(--ink-3); background: none; }
+  #excldlg .erow:hover .tg { border-color: rgba(245,194,107,.35); color: var(--ink-2); }
+  #excldlg .erow .tg:hover { border-color: rgba(245,194,107,.8); color: #F5C26B; background: rgba(245,194,107,.1); }
+  #excldlg .erow.off .tg { border-color: rgba(245,194,107,.5); color: #F5C26B; background: rgba(245,194,107,.12); }
+  #excldlg .empty { padding: 16px 20px; color: var(--ink-3); font-size: 14px; }
+  #excldlg .foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 14px 20px 18px; }
+  #excldlg .foot .note { margin-right: auto; color: var(--ink-3); font-size: 12px; }
   @media (max-width: 860px) { #reset { right: 60px; } }
   #settings { background: var(--panel); backdrop-filter: blur(18px); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(520px, 92vw); box-shadow: 0 24px 80px rgba(0,0,0,.6); }
   #settings::backdrop { background: rgba(13,19,33,.55); backdrop-filter: blur(4px); }
@@ -747,6 +788,8 @@
   </div>
   <div id="reveal"><div class="big"></div><div class="sub"></div></div>
   <div id="prog" hidden><div class="pl"></div><div class="track"><i></i></div></div>
+  <button id="excl-btn" type="button" title="Exclusions · folders Di never walks into">Exclusions</button>
+  <dialog id="excldlg"></dialog>
   <button id="reset" type="button" title="Reset · clear your shortlist, Ru's chat, remembered state and the shelf, then go home">Reset</button>
   <dialog id="resetdlg"></dialog>
   <button id="gear" type="button" title="Settings · which AI Ru thinks with" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></button>

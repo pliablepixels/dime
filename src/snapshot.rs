@@ -46,7 +46,7 @@ fn r_str(r: &mut impl Read) -> io::Result<String> {
     }
     let mut b = vec![0u8; n];
     r.read_exact(&mut b)?;
-    String::from_utf8(b).map_err(|e| io::Error::other(e))
+    String::from_utf8(b).map_err(io::Error::other)
 }
 fn r_u64(r: &mut impl Read) -> io::Result<u64> {
     let mut b = [0u8; 8];
@@ -59,7 +59,9 @@ fn w_node(w: &mut impl Write, n: &Node) -> io::Result<()> {
     w.write_all(&(n.mtime as u64).to_le_bytes())?;
     w.write_all(&(n.atime as u64).to_le_bytes())?;
     w.write_all(&n.files.to_le_bytes())?;
-    w.write_all(&[n.is_dir as u8])?;
+    // bit 0 is_dir, bit 1 shared. Older snapshots wrote only bit 0, so they read back as not
+    // shared, and an older DiMe reading a newer snapshot still sees bit 0 exactly as before.
+    w.write_all(&[n.is_dir as u8 | (n.shared as u8) << 1])?;
     w.write_all(&(n.children.len() as u32).to_le_bytes())?;
     for c in &n.children {
         w_node(w, c)?;
@@ -81,7 +83,7 @@ fn r_node(r: &mut impl Read) -> io::Result<Node> {
     for _ in 0..cnt {
         children.push(r_node(r)?);
     }
-    Ok(Node { name, size, mtime, atime, is_dir: flag[0] == 1, files, children })
+    Ok(Node { name, size, mtime, atime, is_dir: flag[0] & 1 == 1, shared: flag[0] & 2 != 0, files, children })
 }
 
 pub fn save(root: &Path, tree: &Node) -> io::Result<Meta> {
@@ -206,8 +208,8 @@ mod tests {
     use super::*;
     #[test]
     fn round_trip() {
-        let leaf = |n: &str, s: u64| Node { name: n.into(), size: s, mtime: 1, atime: 2, is_dir: false, files: 1, children: vec![] };
-        let tree = Node { name: "r".into(), size: 30, mtime: 5, atime: 6, is_dir: true, files: 2, children: vec![Node { name: "d".into(), size: 30, mtime: 3, atime: 4, is_dir: true, files: 2, children: vec![leaf("a", 10), leaf("bé", 20)] }] };
+        let leaf = |n: &str, s: u64| Node { name: n.into(), size: s, mtime: 1, atime: 2, is_dir: false, files: 1, shared: false, children: vec![] };
+        let tree = Node { name: "r".into(), size: 30, mtime: 5, atime: 6, is_dir: true, files: 2, shared: false, children: vec![Node { name: "d".into(), size: 30, mtime: 3, atime: 4, is_dir: true, files: 2, shared: false, children: vec![leaf("a", 10), leaf("bé", 20)] }] };
         let root = std::env::temp_dir().join(format!("dime-snap-{}", std::process::id()));
         let m = save(&root, &tree).unwrap();
         assert_eq!((m.size, m.files), (30, 2));

@@ -982,8 +982,13 @@ let cleanEasy = 0;
 let navToken = 0, navBusy = 0, lastInput = 0;
 const navHist = []; // folders you came from, newest last
 function goBack() { const p = navHist.pop(); if (p !== undefined) navigate(p, { back: true }); }
-addEventListener('pointerdown', () => (lastInput = performance.now()), true);
-addEventListener('keydown', () => (lastInput = performance.now()), true);
+// Only input aimed at the map defers a refresh. The thing a refresh must never do is move a block
+// out from under a click, and nothing in the panel can cause that. Counting every click anywhere
+// meant that working down the Cleanup list held the map and the totals frozen for as long as you
+// kept working, which is exactly when they most need to keep up.
+const onMap = (e) => renderer.domElement === e.target || renderer.domElement.contains(e.target);
+addEventListener('pointerdown', (e) => { if (onMap(e)) lastInput = performance.now(); }, true);
+addEventListener('keydown', (e) => { if (onMap(e) || e.target === document.body) lastInput = performance.now(); }, true); // keys with nothing focused drive the map
 async function navigate(path, opts = {}) {
   const token = ++navToken;
   // a slow open shows as a busy cursor and a line in the hint, so a click never looks ignored
@@ -1101,24 +1106,68 @@ function showMenu(x, y, n) {
   });
   if (n.path) add('Send to Ru', () => ruTake(n.path, 'menu'));
   if (n.path && n.path !== current.path) add('Hide from map', () => { hiddenPaths.set(n.path, n); for (const [p] of picked) if (p === n.path || p.startsWith(n.path + '/')) picked.delete(p); saveState(); navigate(current.path); toast(`Di: ${n.name} hidden · ${fmt(n.size)}`, 'du'); });
+  // hiding takes it off this map; skipping means the next scan never walks in, here or anywhere
+  if (n.is_dir && n.path) add('Never scan this folder', () => skipToggle(rootPath + '/' + n.path));
   const w = menu.offsetWidth, h = menu.offsetHeight;
   menu.style.left = `${Math.min(x, innerWidth - w - 8)}px`; menu.style.top = `${Math.min(y, innerHeight - h - 8)}px`;
 }
 function hideMenu() { menu.hidden = true; }
-function renderHidden() { // pill on the stats line; the line is rebuilt on every render so the button is too
-  const n = hiddenPaths.size; if (!n) return;
-  const b = document.createElement('button'); b.id = 'hid'; b.type = 'button'; b.title = 'Things you hid from the map';
-  b.textContent = `${n} hidden · ${fmt([...hiddenPaths.values()].reduce((s, x) => s + x.size, 0))}`; b.onclick = showHiddenList;
+// A map whose totals leave something out has to say so, or it is quietly wrong by however much is
+// in there. Same pill as the hidden one, and clicking an entry puts the folder back in the count.
+let skippedHere = [];
+/// Drop the map's menu under a button, from a list of [label, action, class] rows.
+function dropMenu(anchor, { heading, entries }) {
+  tip.hidden = true; menu.innerHTML = ''; menu.hidden = false;
+  const t = document.createElement('div'); t.className = 't'; t.textContent = heading; menu.appendChild(t);
+  for (const [text, fn, cls = ''] of entries()) {
+    const x = document.createElement('button'); x.className = cls; x.textContent = text;
+    x.onclick = () => { hideMenu(); fn(); };
+    menu.appendChild(x);
+  }
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.min(r.left, innerWidth - menu.offsetWidth - 8)}px`;
+  menu.style.top = `${r.bottom + 6}px`;
+}
+/// A pill on the stats line that drops one of those. Two things sit there, what you hid and what
+/// was never scanned, and they differ only in wording and entries. The stats line is rebuilt on
+/// every render, so the pills are too.
+function statsPill({ id, title, label, menu: spec }) {
+  const b = document.createElement('button'); b.id = id; b.type = 'button'; b.title = title; b.textContent = label;
+  b.onclick = (e) => dropMenu(e.currentTarget, spec);
   $('#stats').appendChild(b);
 }
-function showHiddenList(e) {
-  tip.hidden = true; menu.innerHTML = ''; menu.hidden = false;
-  const add = (label, fn, cls = '') => { const b = document.createElement('button'); b.className = cls; b.textContent = label; b.onclick = () => { hideMenu(); fn(); }; menu.appendChild(b); };
-  const t = document.createElement('div'); t.className = 't'; t.textContent = 'Hidden from the map · click to bring back'; menu.appendChild(t);
-  for (const [p, x] of hiddenPaths) add(`${x.name} · ${fmt(x.size)}`, () => { hiddenPaths.delete(p); saveState(); navigate(current.path); });
-  add('Bring all back', () => { hiddenPaths.clear(); saveState(); navigate(current.path); }, 'hot');
-  const r = e.currentTarget.getBoundingClientRect(); menu.style.left = `${Math.min(r.left, innerWidth - menu.offsetWidth - 8)}px`; menu.style.top = `${r.bottom + 6}px`;
+function renderSkipped() {
+  if (!skippedHere.length) return;
+  statsPill({
+    id: 'skp', title: 'Folders left out of this scan entirely',
+    label: `${skippedHere.length} never scanned`,
+    menu: {
+      heading: 'Left out of this map · click to count it again',
+      entries: () => [
+        ...skippedHere.map((p) => [tilde(p), () => skipToggle(p)]),
+        ['Rescan to pick them up', () => startScan(rootPath || '/'), 'hot'],
+      ],
+    },
+  });
+}
+const hiddenMenu = {
+  heading: 'Hidden from the map · click to bring back',
+  entries: () => {
+    const putBack = () => { saveState(); navigate(current.path); };
+    return [
+      ...[...hiddenPaths].map(([p, x]) => [`${x.name} · ${fmt(x.size)}`, () => { hiddenPaths.delete(p); putBack(); }]),
+      ['Bring all back', () => { hiddenPaths.clear(); putBack(); }, 'hot'],
+    ];
+  },
 };
+function renderHidden() {
+  if (!hiddenPaths.size) return;
+  statsPill({
+    id: 'hid', title: 'Things you hid from the map',
+    label: `${hiddenPaths.size} hidden · ${fmt([...hiddenPaths.values()].reduce((s, x) => s + x.size, 0))}`,
+    menu: hiddenMenu,
+  });
+}
 addEventListener('pointerdown', (e) => { if (!menu.contains(e.target)) hideMenu(); }, true);
 addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMenu(); }, true);
 renderer.domElement.addEventListener('contextmenu', (e) => {
@@ -1186,7 +1235,7 @@ function renderStats() {
   if (filter) { const shown = current.children.filter((c) => c.path && matches(c)); t += ` · ${filter === 'idle' ? `idle ${idleDays}+ days: ` : 'showing '}${shown.length} of ${current.children.filter((c) => c.path).length} (${fmt(shown.reduce((s, c) => s + matchedSize(c), 0))})`; }
   $('#stats').textContent = t; $('#stats').insertAdjacentHTML('beforeend', '<span class="dot" aria-label="live"></span>');
   if (mapAsOf) { const a = document.createElement('span'); a.className = 'asof'; a.textContent = `map from ${ago(mapAsOf)} · Rescan for fresh sizes`; a.title = 'Opened from the last snapshot. Changes since then are picked up live, but sizes are as of that scan.'; $('#stats').appendChild(a); }
-  renderHidden();
+  renderHidden(); renderSkipped();
 }
 $('#legend').onclick = (e) => {
   const b = e.target.closest('button[data-f]'); if (!b || scanning || !current) return;
@@ -1445,6 +1494,10 @@ function candRowEl(c, base, depth) {
 }
 // the shortlist: the only place a destructive action starts. Ticks only gather here; Shelve (reversible) or Delete (gated) act on what is checked.
 const idleOpt = () => filter === 'idle' ? { idle: idleDays } : {}; // in the idle view only the files that old move or go
+// While a local Time Machine snapshot holds the volume, the blocks a deleted file used stay
+// claimed and the free figure does not move. Saying so before the deletion is the difference
+// between a cleaner people trust and one they think lied to them.
+const snapshotNote = () => drive?.snapshots ? ` Your disk has ${drive.snapshots} local Time Machine snapshot${drive.snapshots === 1 ? '' : 's'} on it, so the free space may not move until macOS thins ${drive.snapshots === 1 ? 'it' : 'them'}, usually within a day. The files are gone either way.` : '';
 // Items another tool keeps an index of: DiMe hands those to the tool rather than unlinking them.
 const ownedBy = (rows) => [...new Set(rows.filter((r) => r.cmd).map((r) => r.cmd.split(' ')[0]))];
 function listDialog(rows, sub) {
@@ -1454,7 +1507,7 @@ function listDialog(rows, sub) {
   if (owned.length) sub += ` ${owned.join(' and ')} keeps its own index of some of these, so Delete runs its command instead of removing files, and Shelve is not offered for them.`;
   openDialog({ title: 'Shortlist', sub, rows, select: true, actions: [
     { cls: 'go', label: (c) => `Shelve ${c.length} · ${fmt(sumOf(c))}`, fn: (c) => act('/api/shelf/add', { paths: c.map((r) => r.key), ...idleOpt() }, 'shelved') },
-    { cls: 'danger quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: (idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the shelf.` : 'Removed from disk right away. Not the Trash, not the shelf.') + (c.some((r) => r.cmd) ? ` ${c.filter((r) => r.cmd).map((r) => `\`${r.cmd}\``).join(', ')} ${c.filter((r) => r.cmd).length === 1 ? 'runs' : 'run'} for the ones another tool owns.` : ''), rows: c, select: false, gate: 'I understand this cannot be undone. Shelve it instead if unsure.',
+    { cls: 'danger quiet', label: (c) => `Delete ${c.length}…`, fn: (c) => openDialog({ title: 'Delete for good', sub: (idle ? `Only the files untouched for ${days}+ are removed, right away. Not the Trash, not the shelf.` : 'Removed from disk right away. Not the Trash, not the shelf.') + snapshotNote() + (c.some((r) => r.cmd) ? ` ${c.filter((r) => r.cmd).map((r) => `\`${r.cmd}\``).join(', ')} ${c.filter((r) => r.cmd).length === 1 ? 'runs' : 'run'} for the ones another tool owns.` : ''), rows: c, select: false, gate: 'I understand this cannot be undone. Shelve it instead if unsure.',
       actions: [{ cls: 'danger', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/delete', { paths: x.map((r) => r.key), ...idleOpt() }, 'deleted') }] }) },
   ] });
   if (rows.length) { // emptying the shortlist moves nothing, so it needs no confirmation
@@ -1527,7 +1580,7 @@ async function openShelf() {
 /// Second look before anything leaves the disk for good, shared by the ticked rows and Empty the shelf.
 const purgeShelf = (rows) => openDialog({
   title: rows.length === shelfList.length ? 'Empty the shelf' : 'Delete for good',
-  sub: 'Removed from the shelf and from your disk. This is the step that frees the space.',
+  sub: 'Removed from the shelf and from your disk. This is the step that frees the space.' + snapshotNote(),
   rows, select: false, gate: 'I understand this cannot be undone.',
   actions: [{ cls: 'danger', label: (x) => `Delete ${x.length} · ${fmt(sumOf(x))}`, fn: (x) => act('/api/shelf/delete', { ids: x.map((r) => r.key) }, 'deleted') }],
 });
@@ -1619,7 +1672,7 @@ function renderFocus() {
   const foot = document.createElement('div'); foot.className = 'kf';
   if (dirs.length > 8) { const b = document.createElement('button'); b.textContent = allKids ? 'show fewer' : `show all ${dirs.length}`; b.onclick = () => { allKids = !allKids; renderFocus(); }; foot.appendChild(b); }
   if (files.length) foot.append(`${foot.children.length ? ' · ' : ''}${fmtN(files.length)} file${files.length === 1 ? '' : 's'} here · ${fmt(files.reduce((s, c) => s + c.size, 0))}`);
-  if (hiddenHere.length) { const b = document.createElement('button'); b.textContent = `${foot.childNodes.length ? ' · ' : ''}${hiddenHere.length} hidden · show`; b.onclick = showHiddenList; foot.appendChild(b); }
+  if (hiddenHere.length) { const b = document.createElement('button'); b.textContent = `${foot.childNodes.length ? ' · ' : ''}${hiddenHere.length} hidden · show`; b.onclick = (e) => dropMenu(e.currentTarget, hiddenMenu); foot.appendChild(b); }
   if (foot.childNodes.length) el.appendChild(foot);
   ruSync();
 }
@@ -1650,7 +1703,9 @@ async function loadState() {
 }
 // ---------- live updates: the server watches the scan root and bumps `version` on every change ----------
 let version = null;
-let lastRefresh = 0;
+// Far enough back that the first change of a session is picked up at once. Starting at 0 meant the
+// throttle below read the page load as a refresh and ignored everything for the first 15 seconds.
+let lastRefresh = -Infinity, pollFails = 0;
 async function refresh({ force = false } = {}) {
   if (!force && (navBusy || performance.now() - lastInput < 3000)) return; // never yank the map out from under a click; the next tick retries
   lastRefresh = performance.now(); views.clear(); kidCache.clear();
@@ -1665,7 +1720,12 @@ setInterval(async () => {
     if (s.state !== 'done') return;
     if (version !== null && s.version !== version) { if (performance.now() - lastRefresh < 15000) return; await refresh(); if (navBusy || performance.now() - lastInput < 3000) return; } // a busy disk bumps the version every second; the map is redrawn at most every 15 s // leave `version` stale so we retry once things are quiet
     version = s.version;
-  } catch {}
+    pollFails = 0;
+  } catch {
+    // a poll that keeps failing means the map has quietly stopped keeping up, which looks exactly
+    // like a disk where nothing is happening. Say so once rather than let it pass for calm.
+    if (++pollFails === 5) toast('Di: lost touch with the scan. The map may be out of date; Rescan to be sure.', 'du');
+  }
 }, 2000);
 
 // ---------- landing / scan ----------
@@ -1707,22 +1767,140 @@ async function loadDrives() {
     el.appendChild(b);
   });
 }
+// Listing a folder and drawing the trail above it are the same wherever you pick one, so the
+// landing page and the Exclusions dialog share these two. What a row offers differs, and that
+// stays with each of them.
+const lsFolder = (path) => api(`/api/ls?path=${encodeURIComponent(path)}`);
+/// Absolute-path trail, root first, each part clickable. Not the map's crumb: that one walks a
+/// scan root by relative path and carries its own furniture, which is a different thing.
+function pathCrumbs(el, path, onPick) {
+  el.innerHTML = '';
+  const add = (label, p) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => onPick(p); el.appendChild(b); };
+  add('/', '/');
+  path.split('/').filter(Boolean).forEach((part, i, parts) => {
+    const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '/'; el.appendChild(sep);
+    add(part, '/' + parts.slice(0, i + 1).join('/'));
+  });
+}
 async function browse(path) {
+  // Clearing the box is the start of typing a new path, not a request to list nothing. Without
+  // this, emptying it asked the server for "" and put the answer on screen as an error.
+  if (!path.trim()) { $('#err').textContent = ''; return; }
   let r;
-  try { r = await api(`/api/ls?path=${encodeURIComponent(path)}`); } catch (e) { $('#err').textContent = e.message; return; }
+  try { r = await lsFolder(path); } catch (e) { $('#err').textContent = e.message; return; }
   $('#err').textContent = '';
   $('#path').value = r.path;
   for (const b of $('#drives').children) b.setAttribute('aria-pressed', String(r.path === b.dataset.mount || (b.dataset.mount !== '/' && r.path.startsWith(b.dataset.mount + '/')) || (b.dataset.mount === '/' && !r.path.startsWith('/Volumes/'))));
-  const parts = r.path.split('/').filter(Boolean);
-  const bc = $('#bcrumb'); bc.innerHTML = '';
-  const add = (label, p) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => browse(p); bc.appendChild(b); };
-  add('/', '/');
-  parts.forEach((p, i) => { const s = document.createElement('span'); s.className = 'sep'; s.textContent = '/'; bc.appendChild(s); add(p, '/' + parts.slice(0, i + 1).join('/')); });
+  pathCrumbs($('#bcrumb'), r.path, browse);
   lastLs = r; renderDirs();
 }
 let lastLs = null, showHidden = false;
+// Folders Di never walks into. Global, kept server-side in ~/.dime/skip.json, so they outlive the
+// page and hold for every root. Hiding is a different thing: that is per-map and costs the scan
+// nothing, this one is the scan not going there at all.
+let skips = [];
+const isSkipped = (p) => skips.includes(p);
+async function loadSkips() { try { skips = (await api('/api/skip')).paths || []; } catch { skips = []; } afterSkips(); }
+// Every change sends the whole list, so two toggles in flight at once are both built from the same
+// copy and the second silently undoes the first. Ticking three folders in a row is an ordinary
+// thing to do, so the calls queue and each one reads the list the previous one came back with.
+let skipJobs = Promise.resolve();
+function skipToggle(path) {
+  skipJobs = skipJobs.then(async () => {
+    const off = isSkipped(path), was = skips;
+    const next = off ? skips.filter((x) => x !== path) : [...skips, path];
+    skips = next; afterSkips(); // flip the row now; the server still has the last word
+    try {
+      skips = (await api('/api/skip', { paths: next })).paths || [];
+    } catch (e) {
+      skips = was; afterSkips();
+      return toast(`Di: ${e.message}`, 'du');
+    }
+    afterSkips();
+    // the dialog shows the change itself, so a toast on top of it is noise
+    if (!$('#excldlg').open) toast(off ? `Di: counting ${path.split('/').pop()} again` : `Di: ${path.split('/').pop()} will be left out of scans from now on`, 'du');
+  });
+  return skipJobs;
+}
+// The Exclusions dialog: its own folder browser, so folders can be picked at any time rather than
+// only when one happens to be in the scan box. Separate from the landing browser on purpose, since
+// wandering around in here must not change what Go would scan.
+let exclAt = '/';
+function openExcl() {
+  $('#excldlg').innerHTML = `<div class="head"><div class="title">Exclusions</div><div class="sub">Folders Di never walks into. They cost no scan time and count for nothing in any map, on every drive and every future scan. Browse below and exclude whatever you do not want counted.</div></div>
+    <div class="cur"></div><div class="crumb"></div><div class="list"></div>
+    <div class="foot"><span class="note"></span><button class="btn sm quiet" type="button">Done</button></div>`;
+  $('#excldlg').querySelector('.foot .btn').onclick = () => $('#excldlg').close();
+  $('#excldlg').showModal();
+  exclBrowse(exclAt);
+}
+async function exclBrowse(path) {
+  let r;
+  try { r = await lsFolder(path); } catch { r = null; }
+  if (r) exclAt = r.path;
+  renderExcl(r);
+}
+/// Called with a fresh listing, or with nothing to redraw the last one after a change.
+let exclLs = null;
+function renderExcl(r) {
+  const d = $('#excldlg');
+  if (!d.open) return;
+  if (r !== undefined) exclLs = r;
+  // Every change rebuilds the list, which destroys the button that was just used and drops focus
+  // to the body. Remember which row it was and put focus back on its replacement, or a keyboard
+  // user loses their place on every single toggle.
+  const had = d.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
+  const cur = d.querySelector('.cur');
+  cur.innerHTML = skips.length ? '' : '<span class="none">Nothing is excluded yet. Everything on the disk gets counted.</span>';
+  for (const p of skips) {
+    const b = document.createElement('button'); b.type = 'button'; b.title = `Start counting ${p} again`;
+    b.dataset.focus = `chip:${p}`;
+    b.innerHTML = '<span></span><span class="x">×</span>';
+    b.querySelector('span').textContent = tilde(p);
+    b.onclick = () => skipToggle(p);
+    cur.appendChild(b);
+  }
+  const crumb = d.querySelector('.crumb');
+  pathCrumbs(crumb, exclLs?.path || exclAt, exclBrowse);
+  const here = (exclLs?.path || '').replace(/\/+$/, '');
+  const hb = document.createElement('button'); hb.type = 'button'; hb.className = 'here';
+  hb.textContent = isSkipped(here) ? 'Include this folder' : 'Exclude this folder';
+  hb.disabled = !here; // "/" trims to empty: the whole disk is not something to leave out
+  hb.title = here ? here : 'The whole disk is not something to exclude. Open a folder first.';
+  hb.onclick = () => skipToggle(here);
+  hb.dataset.focus = 'here';
+  crumb.appendChild(hb);
+  const list = d.querySelector('.list'); list.innerHTML = '';
+  const dirs = exclLs?.dirs ?? [];
+  if (!dirs.length) list.innerHTML = '<div class="empty">No subfolders here. Use “Exclude this folder” above to leave this one out.</div>';
+  for (const name of dirs) {
+    const full = (exclLs.path.endsWith('/') ? exclLs.path : exclLs.path + '/') + name;
+    const off = isSkipped(full);
+    const row = document.createElement('div'); row.className = `erow${name.startsWith('.') ? ' dot' : ''}${off ? ' off' : ''}`;
+    row.innerHTML = `<button class="nm" type="button">${FOLDER_SVG}<span></span></button><button class="tg" type="button"></button>`;
+    row.querySelector('.nm span').textContent = name;
+    row.querySelector('.nm').onclick = () => exclBrowse(full);
+    const tg = row.querySelector('.tg');
+    tg.textContent = off ? 'Excluded' : 'Exclude';
+    tg.title = off ? `Start counting ${full} again` : `Never scan ${full}`;
+    tg.dataset.focus = `row:${full}`;
+    tg.onclick = () => skipToggle(full);
+    list.appendChild(row);
+  }
+  d.querySelector('.foot .note').textContent = skips.length ? 'Takes effect on the next scan. Rescan to see it.' : '';
+  if (had) d.querySelector(`[data-focus="${CSS.escape(had)}"]`)?.focus();
+}
+$('#excl-btn').onclick = openExcl;
+
+function afterSkips() {
+  $('#excl-btn').classList.toggle('has', skips.length > 0);
+  $('#excl-btn').textContent = skips.length ? `Exclusions · ${skips.length}` : 'Exclusions';
+  renderDirs();
+  if ($('#excldlg').open) renderExcl();
+}
 const FOLDER_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h9A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>';
 function renderDirs() {
+  if (!lastLs) return; // a skip can be toggled from the map before the browser has ever listed anything
   const dirs = $('#dirs'); dirs.innerHTML = '';
   const r = lastLs, list = r.dirs.filter((d) => showHidden || !d.startsWith('.'));
   const hiddenCount = r.dirs.length - r.dirs.filter((d) => !d.startsWith('.')).length;
@@ -1730,9 +1908,10 @@ function renderDirs() {
   $('#hidden-toggle').setAttribute('aria-pressed', String(showHidden));
   if (!list.length) { dirs.innerHTML = '<div class="empty">No subfolders here. Scan this one.</div>'; return; }
   for (const d of list) {
+    const full = r.path + (r.path.endsWith('/') ? '' : '/') + d;
     const b = document.createElement('button'); b.type = 'button'; b.className = d.startsWith('.') ? 'dot' : '';
     b.innerHTML = `${FOLDER_SVG}<span></span><span class="go">Open</span>`;
-    b.querySelector('span').textContent = d;
+    b.querySelector('span').textContent = isSkipped(full) ? `${d} · never scanned` : d;
     b.onclick = () => browse(r.path + (r.path.endsWith('/') ? '' : '/') + d);
     dirs.appendChild(b);
   }
@@ -1741,7 +1920,7 @@ $('#hidden-toggle').onclick = () => { showHidden = !showHidden; renderDirs(); };
 $('#path').addEventListener('change', () => browse($('#path').value));
 loadDrives();
 let homePath = '';
-api('/api/home').then((h) => { homePath = h.path.replace(/\/$/, ''); browse('/'); }); // Di starts at the root of the drive
+api('/api/home').then((h) => { homePath = h.path.replace(/\/$/, ''); loadSkips(); browse('/'); }); // Di starts at the root of the drive
 const tilde = (p) => homePath && (p === homePath || p.startsWith(homePath + '/')) ? '~' + p.slice(homePath.length) : p;
 function beginScanUi(root) {
   if (mode === 'mem') leaveHog();
@@ -1785,6 +1964,7 @@ async function finishScan() {
   if (mode !== 'disk') { rootSize = (await api('/api/status')).size || 1; await loadDrive(); return; } // finished while Me was up; the map waits until you come back $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
   const st = await api('/api/status');
   rootSize = st.size || 1;
+  skippedHere = st.skipped || [];
   denyBanner(st.denied, st.fda);
   await loadDrive();
   await navigate('', pendingHighlight ? { highlight: pendingHighlight } : {}); // same keys as the stacks: they slide into their treemap places
@@ -1854,7 +2034,7 @@ async function enterMap(s) {
   beginScanUi(s.root);
   if (s.state === 'scanning') await watchScan();
   scanning = false; delete document.body.dataset.scanning; scanDone = true; flyHome = false; $('#hint').textContent = 'Click a folder to open it. Right-click for more. Esc goes back.';
-  const st = await api('/api/status'); rootSize = st.size || 1; mapAsOf = st.as_of ?? null; denyBanner(st.denied, st.fda);
+  const st = await api('/api/status'); rootSize = st.size || 1; mapAsOf = st.as_of ?? null; skippedHere = st.skipped || []; denyBanner(st.denied, st.fda);
   await loadDrive(); await loadState();
   const sel = new URLSearchParams(location.search).get('sel'); // deep link: ?sel=<rel path> highlights an item
   await navigate(location.hash.slice(1) || '', sel ? { highlight: sel } : {});
