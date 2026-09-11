@@ -1361,10 +1361,22 @@ function renderCleanup() {
   const cb = document.createElement('button'); cb.className = 'btn sm quiet'; cb.textContent = 'What changed'; cb.title = 'What grew or shrank since the last time this drive was mapped';
   cb.style.marginLeft = '8px'; cb.style.marginTop = '10px'; cb.onclick = showChanges; head.appendChild(cb);
   const xb = document.createElement('button'); xb.className = 'btn sm quiet'; xb.textContent = 'Export'; xb.title = 'Save this cleanup view as a Markdown report'; xb.style.marginTop = '10px'; xb.style.marginLeft = '8px'; xb.onclick = exportReport; head.appendChild(xb);
+  // Built as a list and joined, rather than by tacking a separator onto each piece as it is added.
+  // Doing it the old way only lined up when a subfolder was open: at the root the file count ran
+  // straight into "show everything" with nothing between them, and a stray separator dangled after
+  // it with nothing to separate.
   const scope = head.querySelector('.scope');
-  scope.textContent = `${idle ? `untouched ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+ · ` : ''}${current.path ? `in ${current.name} · ` : `in ${rootName}, ${fmtN(current.files)} files`}`;
-  if (idle) { const b = document.createElement('button'); b.textContent = 'show everything'; b.onclick = () => { idleDays = 0; filter = ''; syncFilterButtons(); navigate(current.path); }; scope.appendChild(b); scope.append(' · '); }
-  if (current.path) { const b = document.createElement('button'); b.textContent = `see whole ${rootName}`; b.onclick = () => navigate(''); scope.appendChild(b); }
+  scope.textContent = '';
+  const link = (text, title, fn) => { const b = document.createElement('button'); b.textContent = text; b.title = title; b.onclick = fn; return b; };
+  const bits = [];
+  if (idle) bits.push(`untouched ${idleDays >= 365 ? 'a year' : idleDays + ' days'}+`);
+  bits.push(current.path ? `in ${current.name}` : `in ${rootName}, ${fmtN(current.files)} files`);
+  if (idle) bits.push(link('show everything', 'Drop the idle filter and list everything Di flagged here, at any age', () => { idleDays = 0; filter = ''; syncFilterButtons(); navigate(current.path); }));
+  if (current.path) bits.push(link(`see whole ${rootName}`, `Widen the panel back out to all of ${rootName}`, () => navigate('')));
+  for (const [i, bit] of bits.entries()) {
+    if (i) scope.append(' · ');
+    scope.append(bit);
+  }
   const tiers = $('#clean-tiers'); tiers.innerHTML = '';
   for (const [tier, size, n] of tierSums) {
     const b = document.createElement('button'); b.style.setProperty('--c', TIER_HEX[tier]); b.setAttribute('aria-pressed', String(tiersOn.has(tier)));
