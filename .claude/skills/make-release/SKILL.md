@@ -16,16 +16,20 @@ git rev-parse --abbrev-ref HEAD # master
 git log origin/master..HEAD     # must be empty: release from what is pushed
 ```
 
-Then run every gate CI runs, in the same form, and read each result rather than the exit
-code of the chain:
+Then run the gates, as one command, with the version you are about to cut:
 
 ```sh
-cargo clippy --all-targets -- -D warnings   # the tree is clean; keep it that way
-cargo test --release
-cargo build --release
-node --check static/app.js                  # see below: nothing else ever parses it
-python3 -c "import tomllib; tomllib.load(open('src/rules.toml','rb'))"
+make check-clean V=<version>
 ```
+
+Run it that way and not as loose `cargo` lines. `check-clean` uses `$(CARGO)`, which is
+`rustup which cargo`, and so does CI. A bare `cargo` on a Mac with Homebrew's rust ahead
+of rustup on PATH is a different compiler with a different clippy, and a gate that passes
+locally under one and fails in CI under the other is worse than no gate at all. That
+happened: 1.93 locally, 1.98 in CI, twelve lints apart.
+
+It runs clippy with `-D warnings`, the tests, `node --check static/app.js` and a parse of
+`rules.toml`, and it refuses a dirty tree or an existing tag before any of it.
 
 `static/app.js` is 3,000 lines and reaches the binary through `include_bytes!`, so the
 Rust build embeds it without ever parsing it. A syntax error there compiles, tests green,
@@ -35,7 +39,7 @@ this is belt and braces, but it costs nothing.
 
 Do not count warnings with `grep -c`. It exits 1 when it finds none, so a clean build
 reads as a failure and a warning-laden one reads as success, which is exactly backwards.
-Read the build output instead.
+Read the output instead.
 
 Then confirm CI agreed, on the commit being released:
 

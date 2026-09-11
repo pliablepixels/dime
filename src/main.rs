@@ -1,3 +1,8 @@
+// `b.size.cmp(&a.size)` says "biggest first" at a glance; `Reverse(a.size)` makes the reader
+// assemble it. The repo sorts that way in a dozen places and the lint's gain is one comparator
+// indirection, so the style stays and the lint goes.
+#![allow(clippy::unnecessary_sort_by)]
+
 mod assets;
 mod gunk;
 mod hog;
@@ -464,7 +469,7 @@ async fn status(State(app): State<Shared>) -> Json<serde_json::Value> {
             let files = live.iter().map(|i| i.files).sum();
             let size = live.iter().map(|i| i.size).sum();
             // a fixed, name-ordered set: every entry keeps its spot on the live map for the whole scan
-            live.sort_unstable_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            live.sort_unstable_by_key(|a| a.name.to_lowercase());
             (files, size, Some(live))
         }
         ScanState::Done { tree, .. } => (tree.files, tree.size, None),
